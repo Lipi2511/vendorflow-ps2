@@ -240,6 +240,30 @@ def case_detail(ref):
         if row["id"] == current["id"] and (status == "Failed" or row["owner"] == "Vendor"):
             if st.button("Correct and resubmit" if status!="Failed" else "Retry application", type="primary"):
                 navigate("Correction", ref)
+    if row["review"]:
+        review = row["review"]
+        with st.expander("Procurement review record", expanded=True):
+            st.caption(f"Automated result · {row['automated_decision']} ({row['automated_owner']})")
+            st.text(f"{review['reviewer']} · {timestamp(review['timestamp'])}")
+            st.text(review["note"])
+    elif row["id"] == current["id"] and (status, row["owner"]) == ("Pending", "Procurement"):
+        with st.expander("Reviewer panel", expanded=True):
+            st.caption("Verify the evidence independently and record the method or reference. This demo workspace uses a shared reviewer view.")
+            with st.form(f"review-{row['id']}"):
+                reviewer = st.text_input("Reviewer name", max_chars=120)
+                note = st.text_area("Internal verification note", max_chars=2000)
+                approve_col, reject_col, return_col = st.columns(3)
+                approve = approve_col.form_submit_button("Verify & approve", type="primary")
+                reject = reject_col.form_submit_button("Reject")
+                send_back = return_col.form_submit_button("Send back to vendor")
+            if approve or reject or send_back:
+                action = "approve" if approve else "reject" if reject else "return"
+                try:
+                    store.review(workspace, ref, row["attempt"], action, reviewer, note)
+                except CaseConflict as exc:
+                    st.error(str(exc))
+                else:
+                    st.rerun()
     if row["email_body"]:
         with st.expander("Email to vendor", expanded=True):
             st.text(row["email_subject"])

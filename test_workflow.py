@@ -185,3 +185,42 @@ def test_ai_guard_and_draft(store):
     assert check.readings["account"]["evidence"] == "•••• 0146"
     row = submit(store, "Wrong document", ai=ai)
     assert "cancelled cheque" in row["email_body"] and row["ref"] in row["email_body"]
+
+def test_bank_review_changes_only_workspace_register(store):
+    hold = submit(store, "Changed bank account")
+    store.review("local", hold["ref"], 1, "approve", "Demo Reviewer", "Verified via known supplier contact.")
+    current = store.history("local", hold["ref"])[0]
+    assert (current["decision"], current["automated_decision"], current["automated_owner"]) == ("Approved", "Pending", "Procurement")
+    assert current["review"]["reviewer"] == "Demo Reviewer"
+    assert store.events(hold["id"])[-1]["stage"] == "Procurement review"
+    with closing(store.connect()) as db:
+        assert db.execute("SELECT ending FROM supplier_history").fetchone()[0] == "1824"
+        assert db.execute("SELECT ending FROM suppliers WHERE workspace='local'").fetchone()[0] == "8479"
+        assert db.execute("SELECT ending FROM suppliers WHERE workspace='seed' AND reference='SUP-017'").fetchone()[0] == "1824"
+    assert "register.duplicate" in submit(store, "Changed bank account")["checks"]
+    with pytest.raises(CaseConflict):
+        store.review("local", hold["ref"], 1, "reject", "Demo Reviewer", "Second click")
+    with pytest.raises(CaseConflict):
+        store.review("other", hold["ref"], 1, "approve", "Demo Reviewer", "Other workspace")
+
+
+@pytest.mark.parametrize("action,decision,owner", [
+    ("approve", "Approved", "Complete"), ("reject", "Rejected", "Procurement"),
+    ("return", "Pending", "Vendor"),
+])
+def test_human_resolution_of_new_supplier(store, action, decision, owner):
+    from vendorflow.examples import gst_check
+    base = sample_form("New supplier")
+    prefix = "27AABCZ1234F1Z"
+    form = base | {"gst":prefix+gst_check(prefix), "pan":prefix[2:12]}
+    tax = pdf("GST Registration Certificate", [("Legal Name", form["name"]), ("GSTIN", form["gst"])])
+    bank = sample_files("New supplier")[1]
+    hold = submit(store, form=form, docs=(tax, bank))
+    assert hold["owner"] == "Procurement" and hold["email_body"] is None
+    with pytest.raises(CaseConflict):
+        store.review("local", hold["ref"], 1, action, "Demo Reviewer", "")
+    store.review("local", hold["ref"], 1, action, "Demo Reviewer", "Verified registry evidence independently.")
+    current = store.history("local", hold["ref"])[0]
+    assert (current["decision"], current["owner"]) == (decision, owner)
+    with closing(store.connect()) as db:
+        assert db.execute("SELECT COUNT(*) FROM suppliers WHERE workspace='local'").fetchone()[0] == (action == "approve")

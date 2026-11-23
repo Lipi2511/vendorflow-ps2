@@ -4,15 +4,13 @@ import logging
 
 from .ai import template_email, vendor_actions
 from .policy import Check, compare_documents, field_checks, normalized, read_document, valid_gst
-from .store import CaseConflict, fingerprint, now
+from .store import CaseConflict, Store, fingerprint, now
 
 
 def register_checks(db, workspace, form, tax):
     gst = normalized("gst", form["gst"])
     account = normalized("account", form["account"])
-    record = db.execute("""SELECT * FROM suppliers WHERE workspace IN ('seed',?) AND gst=?
-                           ORDER BY workspace='seed' DESC LIMIT 1""",
-                        (workspace, fingerprint(gst))).fetchone()
+    record = Store.supplier_for(db, workspace, fingerprint(gst))
     checks = []
     if record and record["status"] == "Blocked":
         corroborated = (valid_gst(gst) and gst == normalized("gst", tax.get("gst", "")) and
@@ -34,14 +32,28 @@ def register_checks(db, workspace, form, tax):
     elif valid_gst(gst):
         checks.append(Check("register.new", True, "Supplier register searched. No matching tax identifier."))
     if account:
-        shared = db.execute("""SELECT reference FROM suppliers WHERE workspace IN ('seed',?) AND account=? AND gst<>?
-                               AND status='Active' ORDER BY reference LIMIT 1""",
-                            (workspace, fingerprint(account), fingerprint(gst))).fetchone()
+        shared = db.execute("""SELECT reference FROM suppliers AS supplier
+                               WHERE supplier.workspace IN ('seed',?) AND supplier.account=? AND supplier.gst<>?
+                               AND supplier.status='Active'
+                               AND (supplier.workspace<>'seed' OR NOT EXISTS (
+                                   SELECT 1 FROM suppliers AS local WHERE local.workspace=? AND local.gst=supplier.gst
+                               )) ORDER BY reference LIMIT 1""",
+                            (workspace, fingerprint(account), fingerprint(gst), workspace)).fetchone()
         if shared:
             checks.append(Check("register.shared_account", False,
                                 f"Bank account already registered to {shared['reference']} (different GSTIN). Verify independently.",
                                 severity="procurement"))
     return checks
+
+
+def supplier_snapshot(db, workspace, form):
+    gst, account, ifsc = (normalized(key, form[key]) for key in ("gst", "account", "ifsc"))
+    if not valid_gst(gst) or not account or not ifsc:
+        return {}
+    gst_key = fingerprint(gst)
+    existing = Store.supplier_for(db, workspace, gst_key)
+    prior = [existing[key] for key in ("reference", "account", "ifsc")] if existing else None
+    return dict(gst=gst_key, account=fingerprint(account), ending=account[-4:], ifsc=ifsc, prior=prior)
 
 
 def decide(checks):
@@ -144,6 +156,7 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
             store.finish_stage(db, run, STAGES[4],
                                "Issues" if any(not c.passed for c in risk_checks) else "Complete", check_summary(risk_checks))
             decision, owner, message = decide(checks)
+            snapshot = supplier_snapshot(db, workspace, form) if owner == "Procurement" and decision == "Pending" else None
             if decision == "Approved":
                 store.add_supplier(db, workspace, form, "Active", row["ref"])
             evidence = [c.data() for c in checks]
@@ -152,8 +165,8 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
                 actions = ["Contact procurement with this reference to request a review."]
             subject, body = (draft if draft and actions == draft_actions else
                              template_email(row["ref"], actions)) if actions else (None, None)
-            db.execute("""UPDATE runs SET state='Complete',decision=?,owner=?,message=?,checks=?,email_subject=?,email_body=? WHERE id=?""",
-                       (decision, owner, message, json.dumps(evidence), subject, body, run))
+            db.execute("""UPDATE runs SET state='Complete',decision=?,owner=?,message=?,checks=?,email_subject=?,email_body=?,supplier_snapshot=? WHERE id=?""",
+                       (decision, owner, message, json.dumps(evidence), subject, body, json.dumps(snapshot) if snapshot is not None else None, run))
             summary = f"{decision} · {owner}" + (" · email draft prepared" if subject else "")
             store.finish_stage(db, run, last, "Complete", summary)
         notify(last, "Complete", summary)
