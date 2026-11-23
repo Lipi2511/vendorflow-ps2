@@ -12,6 +12,7 @@ import streamlit as st
 from vendorflow.ai import Assistance
 from vendorflow.examples import EXAMPLES, STATES, sample_files, sample_form, sample_pack
 from vendorflow.policy import LABELS
+from vendorflow.reporting import case_flags, dashboard_metrics, filter_cases, pending_reasons
 from vendorflow.store import CaseConflict, Store
 from vendorflow.workflow import STAGES, execute
 
@@ -89,8 +90,8 @@ def dashboard():
     st.title("Onboarding dashboard")
     st.caption("Supplier applications, decisions and next actions.")
     rows = store.latest(workspace)
-    for col, label in zip(st.columns(4), ("Applications", "Approved", "Pending", "Rejected")):
-        col.metric(label, len(rows) if label == "Applications" else sum(r["decision"] == label for r in rows))
+    for col, (label, value) in zip(st.columns(6), dashboard_metrics(rows).items()):
+        col.metric(label, value)
     st.subheader("Application history")
     if not rows:
         with st.container(border=True):
@@ -99,18 +100,32 @@ def dashboard():
             if st.button("Start application", type="primary"):
                 navigate("New application")
         return
-    f = st.selectbox("Filter by status", ["All statuses", "Approved", "Pending", "Rejected", "Failed", "Running"])
-    filtered = [r for r in rows if f == "All statuses" or f in (r["decision"], r["state"])]
+    with st.expander("Why applications are pending", expanded=True):
+        reasons = pending_reasons(rows)
+        if reasons:
+            st.bar_chart([{"Reason": reason, "Cases": count} for reason, count in reasons.items()],
+                         x="Reason", y="Cases", horizontal=True, sort="-Cases")
+        else:
+            st.caption("No pending reasons recorded.")
+    status_col, owner_col, search_col = st.columns([1, 1, 2])
+    status_filter = status_col.selectbox("Filter by status", ["All statuses", "Approved", "Pending", "Rejected", "Failed", "Running"])
+    owner_filter = owner_col.selectbox("Filter by owner", ["All owners", "Vendor", "Procurement", "Complete", "Operator", "Processing"])
+    query = search_col.text_input("Search name or reference")
+    filtered = filter_cases(rows, status_filter, owner_filter, query)
     if not filtered:
         st.info("No applications match this status.")
     for row in filtered:
         with st.container(border=True):
-            a, b, c = st.columns([4, 2, 1.3], vertical_alignment="center")
-            a.text(row["name"])
-            a.caption(f"{row['ref']} · {timestamp(row['started'])}")
-            b.write(row["decision"] or row["state"])
-            b.caption(f"Owner · {row['owner'] or 'Processing'}")
-            if c.button("Open case", key=f"open{row['id']}"):
+            identity, status, flags, action = st.columns([3.5, 2, 3, 1.25], vertical_alignment="center")
+            identity.text(row["name"])
+            identity.caption(f"{row['ref']} · {row['attempt']} attempt{'s' if row['attempt'] != 1 else ''}")
+            identity.caption(f"Updated {timestamp(row['updated'])}")
+            status.write(row["decision"] or row["state"])
+            status.caption(f"Owner · {row['owner'] or 'Processing'}")
+            risk = case_flags(row)
+            if risk:
+                flags.text(" · ".join(risk))
+            if action.button("Open case", key=f"open{row['id']}"):
                 navigate("Case", row["ref"])
 
 

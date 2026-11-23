@@ -251,3 +251,21 @@ def test_fourth_attempt_can_resolve_the_case(store):
     tax, _, correct = sample_files("Wrong document")
     result = submit(store, "Wrong document", docs=(tax, correct), ref=ref, previous=3)
     assert result["decision"] == "Approved"
+
+def test_dashboard_counts_latest_cases_and_filters(store):
+    from vendorflow.reporting import case_flags, dashboard_metrics, filter_cases, pending_reasons
+    approved = submit(store)
+    changed = submit(store, "Changed bank account")
+    pending = submit(store, "Wrong document")
+    rows = store.latest("local")
+    metrics = dashboard_metrics(rows)
+    assert [metrics[k] for k in ("Applications", "Approved", "Waiting on vendor", "Waiting on procurement")] == [3, 1, 1, 1]
+    assert metrics["Median decision time"] != "—"
+    assert filter_cases(rows, "Pending", "Procurement", "juniper")[0]["ref"] == changed["ref"]
+    assert filter_cases(rows, "All statuses", "All owners", approved["ref"].lower())[0]["ref"] == approved["ref"]
+    assert "Bank account changed" in case_flags(changed)
+    assert pending_reasons(rows)["Bank document needs review"] == 1
+    tax, _, correct = sample_files("Wrong document")
+    submit(store, "Wrong document", docs=(tax, correct), ref=pending["ref"], previous=1)
+    assert dashboard_metrics(store.latest("local"))["Applications"] == 3
+    assert "Bank document needs review" not in pending_reasons(store.latest("local"))

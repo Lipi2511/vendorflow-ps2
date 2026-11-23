@@ -153,8 +153,10 @@ class Store:
         result["automated_decision"] = row["decision"]
         result["automated_owner"] = row["owner"]
         result["review"] = dict(review) if review else None
-        result["updated"] = review["timestamp"] if review else (
-            db.execute("SELECT MAX(finished) FROM events WHERE run=?", (row["id"],)).fetchone()[0] or row["started"])
+        result["decided_at"] = db.execute(
+            "SELECT MAX(finished) FROM events WHERE run=? AND stage<>'Procurement review'",
+            (row["id"],)).fetchone()[0] if row["decision"] else None
+        result["updated"] = review["timestamp"] if review else (result["decided_at"] or row["started"])
         if review:
             for field in ("decision", "owner", "message", "email_subject", "email_body"):
                 result[field] = review[field]
