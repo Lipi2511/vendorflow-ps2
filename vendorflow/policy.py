@@ -199,7 +199,7 @@ def field_checks(form):
         if not form[key].strip():
             continue
         checks.append(Check(f"form.{key}", bool(ok), title + (" passed." if ok else " failed."),
-                            f"Correct the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} on the form."))
+                            f"Correct the {LABELS[key] if key in ('gst', 'ifsc', 'pan') else LABELS[key].lower()} on the form."))
     gst = normalized("gst", form["gst"])
     pan = normalized("pan", form.get("pan", ""))
     state = normalized("state", form.get("state", ""))
@@ -215,13 +215,16 @@ def field_checks(form):
     if valid_gst(gst):
         embedded = gst[2:12]
         if re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", pan):
-            checks.append(Check("form.pan_match", pan == embedded, "Entered PAN compared with the PAN embedded in GSTIN.",
+            checks.append(Check("form.pan_match", pan == embedded, "Entered PAN matches the PAN in the GSTIN." if pan == embedded else
+                                f"Entered PAN {pan} does not match the PAN in the GSTIN ({embedded}).",
                                 "Enter the PAN matching the GSTIN."))
         entity = embedded[3]
         if name.endswith("limited"):
+            type_label = PAN_TYPES.get(entity, "different entity type")
+            article = "an" if type_label[0].lower() in "aeiou" else "a"
             checks.append(Check("form.pan_type", entity == "C",
                                 "GSTIN indicates a company." if entity == "C" else
-                                f"GSTIN indicates a {PAN_TYPES.get(entity, 'different entity type')}, but the legal name indicates a company.",
+                                f"GSTIN indicates {article} {type_label}, but the legal name indicates a company.",
                                 "Provide the GSTIN registered to this company."))
         if entity != "P" and name:
             checks.append(Check("form.pan_initial", embedded[4] == name[0].upper(),
@@ -262,14 +265,17 @@ def compare_documents(form, tax, bank):
         for key in ("name", "gst", "pan", "state"):
             if key not in tax or not form.get(key, "").strip():
                 continue
+            gst = normalized("gst", form["gst"])
+            if key == "pan" and valid_gst(gst) and normalized("pan", form["pan"]) != gst[2:12]:
+                continue
             checks.append(compare(key, form[key], tax[key], "Application", "GST certificate",
-                                  f"Reconcile the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} with the GST certificate."))
+                                  f"Reconcile the {LABELS[key] if key in ('gst', 'ifsc', 'pan') else LABELS[key].lower()} with the GST certificate."))
     if bank:
         for key in ("holder", "account", "ifsc"):
             if key not in bank or not form[key].strip():
                 continue
             checks.append(compare(key, form[key], bank[key], "Application", "Bank letter",
-                                  f"Correct the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} or provide matching bank proof."))
+                                  f"Correct the {LABELS[key] if key in ('gst', 'ifsc', 'pan') else LABELS[key].lower()} or provide matching bank proof."))
         if form["name"].strip() and "holder" in bank:
             check = compare("name", form["name"], bank["holder"], "Legal entity", "Bank letter holder",
                             "Provide bank proof in the applicant’s legal name or contact procurement for review.")

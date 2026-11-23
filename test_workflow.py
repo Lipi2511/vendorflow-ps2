@@ -456,3 +456,14 @@ def test_ai_email_validation(variant):
     result = Assistance(client=Fake()).draft(ref, [], actions)
     assert result.method == ("ai" if variant == "valid" else "template")
     assert result.body == (body if variant == "valid" else fallback)
+
+def test_pan_copy_and_single_action():
+    from vendorflow.policy import Check, compare_documents, field_checks
+    from vendorflow.workflow import check_summary
+    form = sample_form("New supplier") | {"pan":"AABCA1235F"}
+    checks = field_checks(form)
+    assert "AABCA1235F" in next(c.detail for c in checks if c.code == "form.pan_match")
+    assert not any(c.code.startswith("compare.pan") for c in compare_documents(form, dict(pan="AABCA1234F"), {}))
+    assert check_summary([Check("one", True, "")]) == "1 check passed."
+    assert check_summary([Check("one", False, "")]) == "1 check · 1 observation"
+    assert check_summary([Check("one", False, ""), Check("two", False, "")]) == "2 checks · 2 observations"

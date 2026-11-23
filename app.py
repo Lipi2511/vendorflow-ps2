@@ -270,8 +270,6 @@ def case_detail(ref):
     files = ss.attempt_files.get((ref, attempt), {})
     st.caption(timestamp(row["started"]))
     with st.container(border=True):
-        color = {"Approved": "green", "Pending": "orange", "Rejected": "red", "Failed": "red"}.get(status, "gray")
-        st.badge(status, color=color)
         st.subheader(status, anchor=False)
         st.caption(f"Next action owner · {row['owner'] or 'Processing'}")
         priorities = {"info": 0, "vendor": 1, "procurement": 2, "block": 3}

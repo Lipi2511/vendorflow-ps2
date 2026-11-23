@@ -77,7 +77,10 @@ def check_summary(checks):
     issues = sum(not check.passed for check in checks)
     if not checks:
         return "No additional comparisons were available."
-    return f"{len(checks)} checks · {issues} observations" if issues else f"{len(checks)} checks passed."
+    count = len(checks)
+    label = "check" if count == 1 else "checks"
+    observation = "observation" if issues == 1 else "observations"
+    return f"{count} {label} · {issues} {observation}" if issues else f"{count} {label} passed."
 
 
 def reading_summary(checks):
