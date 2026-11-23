@@ -339,3 +339,85 @@ def test_kit_has_every_input_set():
             folder = name.lower().replace(" ", "-")
             assert json.loads(archive.read(f"{folder}/form.json")) == sample_form(name)
             assert archive.read(f"{folder}/bank.pdf") == sample_files(name)[1]
+
+def test_streamlit_flow_and_optional_key(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("VENDORFLOW_DB", str(tmp_path / "streamlit.sqlite3"))
+    app = AppTest.from_file("app.py").run()
+    assert not app.exception
+    assert any(c.value == "AI extraction off" for c in app.caption)
+    app.toggle[0].set_value(False).run()
+
+    def click(label):
+        next(widget for widget in app.button if widget.label == label).click().run(timeout=20)
+        assert not app.exception
+
+    def application(example):
+        click("New application")
+        next(widget for widget in app.selectbox if widget.label == "Input set").set_value(example).run()
+        click("Run onboarding checks")
+
+    application("Wrong document")
+    assert any(h.value == "Pending" for h in app.subheader)
+    click("Correct and resubmit")
+    app.checkbox[0].set_value(True).run()
+    click("Run onboarding checks")
+    assert any(h.value == "Approved" for h in app.subheader)
+    application("Shared bank account")
+    application("Changed bank account")
+    assert any(h.value == "Pending" for h in app.subheader)
+    next(widget for widget in app.text_input if widget.label == "Reviewer name").set_value("Demo Reviewer")
+    app.text_area[0].set_value("Verified via the established contact.")
+    click("Verify & approve")
+    assert any(h.value == "Approved" for h in app.subheader)
+    click("Return to dashboard")
+    metrics = {metric.label: metric.value for metric in app.metric}
+    assert metrics["Applications"] == "3" and metrics["Waiting on procurement"] == "1"
+    assert len(app.get("vega_lite_chart")) == 1
+
+    def fake_openai(**kwargs):
+        assert kwargs["api_key"] == "fictional-test-key"
+        return object()
+
+    monkeypatch.setattr("openai.OpenAI", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "fictional-test-key")
+    app_with_key = AppTest.from_file("app.py").run()
+    assert not app_with_key.exception
+    assert any(c.value == "AI extraction available" for c in app_with_key.caption)
+
+def test_reviewer_send_back_uses_public_instruction_only(store):
+    hold = submit(store, "Changed bank account")
+    request = "Supply a signed authorization from your finance contact."
+    store.review("local", hold["ref"], 1, "return", "Reviewer", "Internal register SUP-017.",
+                 vendor_instruction=request)
+    row = store.history("local", hold["ref"])[0]
+    assert store.outstanding(row) == [request]
+    assert request in row["email_body"] and "SUP-017" not in row["email_body"]
+
+
+def test_migrate_database_before_upgrade(tmp_path):
+    import sqlite3
+    file = tmp_path / "legacy.sqlite3"
+    with closing(sqlite3.connect(file)) as db, db:
+        db.executescript("""
+            CREATE TABLE runs (
+              id INTEGER PRIMARY KEY, workspace TEXT NOT NULL, ref TEXT NOT NULL, attempt INTEGER NOT NULL,
+              token TEXT NOT NULL, name TEXT NOT NULL, started TEXT NOT NULL, state TEXT NOT NULL,
+              decision TEXT, owner TEXT, message TEXT, checks TEXT NOT NULL DEFAULT '[]',
+              UNIQUE(workspace,ref,attempt), UNIQUE(workspace,token)
+            );
+            CREATE TABLE events (
+              run INTEGER NOT NULL REFERENCES runs(id), stage TEXT NOT NULL, started TEXT NOT NULL,
+              finished TEXT, state TEXT NOT NULL, PRIMARY KEY(run,stage)
+            );
+            INSERT INTO runs VALUES(1,'local','VF-OLD',1,'old','Demo Legacy Supplier',
+              '2026-11-23T10:01:00.000+00:00','Complete','Pending','Vendor','Old request','[]');
+            INSERT INTO events VALUES(1,'Receive application','2026-11-23T10:01:00.000+00:00',
+                '2026-11-23T10:01:00.000+00:00','Complete');
+        """)
+    migrated = Store(file)
+    assert migrated.history("local", "VF-OLD")[0]["message"] == "Old request"
+    assert migrated.events(1)[0]["summary"] is None
+    assert submit(migrated, ref="VF-OLD", previous=1)["decision"] == "Approved"

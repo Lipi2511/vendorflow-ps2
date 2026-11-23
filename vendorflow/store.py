@@ -153,10 +153,11 @@ class Store:
         result["automated_decision"] = row["decision"]
         result["automated_owner"] = row["owner"]
         result["review"] = dict(review) if review else None
-        result["decided_at"] = db.execute(
+        finished = db.execute(
             "SELECT MAX(finished) FROM events WHERE run=? AND stage<>'Procurement review'",
-            (row["id"],)).fetchone()[0] if row["decision"] else None
-        result["updated"] = review["timestamp"] if review else (result["decided_at"] or row["started"])
+            (row["id"],)).fetchone()[0]
+        result["decided_at"] = finished if row["decision"] else None
+        result["updated"] = review["timestamp"] if review else (finished or row["started"])
         if review:
             for field in ("decision", "owner", "message", "email_subject", "email_body"):
                 result[field] = review[field]
@@ -167,7 +168,7 @@ class Store:
         return db.execute("""SELECT * FROM suppliers WHERE workspace IN ('seed',?) AND gst=?
                              ORDER BY workspace='seed',workspace LIMIT 1""", (workspace, gst)).fetchone()
 
-    def review(self, workspace, ref, attempt, action, reviewer, note):
+    def review(self, workspace, ref, attempt, action, reviewer, note, *, vendor_instruction=""):
         reviewer, note = reviewer.strip(), note.strip()
         if not reviewer or not note:
             raise CaseConflict("Enter a reviewer name and verification note.")
@@ -190,7 +191,9 @@ class Store:
             decision, owner, message = options[action]
             actions = vendor_actions(json.loads(row["checks"]))
             if action == "return":
-                actions = actions or ["Contact procurement with this reference for the requested correction."]
+                if vendor_instruction.strip():
+                    actions.append(" ".join(vendor_instruction.split())[:240])
+                actions = list(dict.fromkeys(actions)) or ["Contact procurement with this reference for the requested correction."]
                 message = " ".join(actions)
             elif action == "reject":
                 actions = ["Contact procurement with this reference to request a review."]
@@ -240,8 +243,9 @@ class Store:
 
     def latest(self, workspace):
         with closing(self.connect()) as db:
-            return [self.outcome(db, row) for row in db.execute("""SELECT * FROM runs WHERE id IN (
+            rows = [self.outcome(db, row) for row in db.execute("""SELECT * FROM runs WHERE id IN (
                 SELECT MAX(id) FROM runs WHERE workspace=? GROUP BY ref) ORDER BY id DESC""", (workspace,))]
+        return sorted(rows, key=lambda row: (row["updated"], row["id"]), reverse=True)
 
     def events(self, run):
         with closing(self.connect()) as db:

@@ -26,13 +26,13 @@ OPENINGS = ("Please review the following items.", "Please update the items below
 
 
 class Assistance:
-    def __init__(self, key=None, client=None):
+    def __init__(self, key=None, client=None, model=None):
         if client is None:
             from openai import OpenAI
 
             client = OpenAI(api_key=key, timeout=20.0, max_retries=1)
         self.client = client
-        self.model = os.getenv("VENDORFLOW_MODEL", "").strip() or "gpt-4o-mini"
+        self.model = model or os.getenv("VENDORFLOW_MODEL", "").strip() or "gpt-4o-mini"
 
     def request(self, name, schema, instructions, content):
         try:

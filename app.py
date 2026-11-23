@@ -11,7 +11,7 @@ import streamlit as st
 
 from vendorflow.ai import Assistance
 from vendorflow.examples import EXAMPLES, STATES, sample_files, sample_form, sample_pack
-from vendorflow.policy import LABELS
+from vendorflow.policy import LABELS, valid_email
 from vendorflow.reporting import (attempt_label, case_flags, dashboard_metrics, evidence_groups,
                                   filter_cases, pending_reasons, preview_pdf)
 from vendorflow.store import CaseConflict, Store
@@ -25,20 +25,21 @@ st.markdown("""<style>
 h1,h2,h3{letter-spacing:-.035em}
 [data-testid="stCaptionContainer"]{color:#4b625b}
 </style>""", unsafe_allow_html=True)
-def api_key():
+def setting(name):
     try:
-        return str(st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", "")).strip()
+        configured = str(st.secrets.get(name) or "").strip()
     except FileNotFoundError:
-        return os.environ.get("OPENAI_API_KEY", "").strip()
+        configured = ""
+    return configured or os.environ.get(name, "").strip()
 
 
 @st.cache_resource(show_spinner=False)
-def assistance(key):
-    return Assistance(key)
+def assistance(key, model):
+    return Assistance(key, model=model)
 
 
-key_from_settings = api_key()
-ai = assistance(key_from_settings) if key_from_settings else None
+key_from_settings = setting("OPENAI_API_KEY")
+ai = assistance(key_from_settings, setting("VENDORFLOW_MODEL")) if key_from_settings else None
 ss = st.session_state
 if not re.fullmatch(r"[a-f0-9]{32}", st.query_params.get("w", "")):
     st.query_params["w"] = uuid4().hex
@@ -260,8 +261,10 @@ def case_detail(ref):
         st.badge(status, color=color)
         st.subheader(status, anchor=False)
         st.caption(f"Next action owner · {row['owner'] or 'Processing'}")
-        finding = next((check["detail"] for check in checks if not check["passed"] and
-                        check.get("severity", "vendor") in {"block", "procurement", "vendor"}), "")
+        priorities = {"info": 0, "vendor": 1, "procurement": 2, "block": 3}
+        actionable = [check for check in checks if not check["passed"] and check.get("severity") != "info"]
+        leading = max(actionable, key=lambda check: priorities.get(check.get("severity", "vendor"), 0), default={})
+        finding = leading.get("detail")
         if row["review"]:
             st.text(row["message"])
             st.badge("Procurement reviewed", color="blue")
@@ -301,6 +304,7 @@ def case_detail(ref):
             with st.form(f"review-{row['id']}"):
                 reviewer = st.text_input("Reviewer name", max_chars=120)
                 note = st.text_area("Internal verification note", max_chars=2000)
+                vendor_instruction = st.text_input("Vendor instruction (optional for send-back)", max_chars=240)
                 approve_col, reject_col, return_col = st.columns(3)
                 approve = approve_col.form_submit_button("Verify & approve", type="primary")
                 reject = reject_col.form_submit_button("Reject")
@@ -308,7 +312,8 @@ def case_detail(ref):
             if approve or reject or send_back:
                 action = "approve" if approve else "reject" if reject else "return"
                 try:
-                    store.review(workspace, ref, row["attempt"], action, reviewer, note)
+                    store.review(workspace, ref, row["attempt"], action, reviewer, note,
+                                 vendor_instruction=vendor_instruction)
                 except CaseConflict as exc:
                     st.error(str(exc))
                 else:
@@ -317,7 +322,9 @@ def case_detail(ref):
         with st.expander("Email to vendor", expanded=True):
             st.text(row["email_subject"])
             st.code(row["email_body"], language=None)
-            recipient = files.get("form", {}).get("email", "")
+            recipient = files.get("form", {}).get("email", "").strip()
+            if not valid_email(recipient):
+                recipient = ""
             email_query = urlencode(dict(subject=row["email_subject"], body=row["email_body"]), quote_via=quote)
             link = f"mailto:{quote(recipient, safe='@.')}?{email_query}"
             st.markdown(f'<a href="{html.escape(link, quote=True)}">Open in your email app</a>', unsafe_allow_html=True)

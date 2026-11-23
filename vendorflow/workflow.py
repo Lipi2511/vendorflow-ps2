@@ -5,7 +5,7 @@ import logging
 
 from .ai import template_email, vendor_actions
 from .policy import LABELS, Check, compare_documents, field_checks, normalized, read_document, valid_gst
-from .store import CaseConflict, Store, fingerprint, now
+from .store import CaseConflict, Store, fingerprint
 
 
 def register_checks(db, workspace, form, tax):
@@ -168,8 +168,9 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
             checks[before:] = register_checks(db, workspace, form, tax)
             raise_repeat_hold(db, workspace, row, checks)
             risk_checks = checks[before:]
-            store.finish_stage(db, run, STAGES[4],
-                               "Issues" if any(not c.passed for c in risk_checks) else "Complete", check_summary(risk_checks))
+            db.execute("UPDATE events SET state=?,summary=? WHERE run=? AND stage=?",
+                       ("Issues" if any(not c.passed for c in risk_checks) else "Complete",
+                        check_summary(risk_checks), run, STAGES[4]))
             decision, owner, message = decide(checks)
             snapshot = supplier_snapshot(db, workspace, form) if owner == "Procurement" and decision == "Pending" else None
             if decision == "Approved":

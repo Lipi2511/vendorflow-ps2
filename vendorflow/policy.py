@@ -157,7 +157,8 @@ def read_document(data, kind, ai=None):
                 if text.strip():
                     # Normalize whitespace and punctuation without reordering the document.
                     needle = compact(value)
-                    if not needle or needle not in compact(text) or not compact(evidence) or compact(evidence) not in compact(text):
+                    snippet = compact(evidence)
+                    if not needle or needle not in snippet or snippet not in compact(text):
                         continue
                 elif confidence < 0.85:
                     continue
@@ -176,6 +177,10 @@ def read_document(data, kind, ai=None):
     return fields, Check(f"{kind}.document", True, f"{label} fields read{suffix}.", readings=readings)
 
 
+def valid_email(value):
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
+
+
 def field_checks(form):
     missing = [label for key, label in LABELS.items() if key != "trade" and not form.get(key, "").strip()]
     checks = [Check("form.required", not missing, "Required fields supplied." if not missing else
@@ -184,7 +189,7 @@ def field_checks(form):
         ("gst", valid_gst(form["gst"].strip().upper()), "GSTIN structure and checksum"),
         ("ifsc", re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", form["ifsc"].strip().upper()), "IFSC format"),
         ("account", re.fullmatch(r"[0-9]{6,20}", normalized("account", form["account"])), "Account number format (demo policy)"),
-        ("email", re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", form["email"].strip()), "Business email format"),
+        ("email", valid_email(form["email"].strip()), "Business email format"),
     ]
     for key, ok, title in formats:
         if not form[key].strip():
@@ -231,7 +236,7 @@ def field_checks(form):
                             "Account number resembles a placeholder." if pattern else "Account number sanity check passed.",
                             "Enter the bank account number shown on the bank proof."))
     email = form["email"].strip().lower()
-    if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+    if valid_email(email):
         first_label = email.rsplit("@", 1)[1].split(".")[0]
         words = re.findall(r"[^\W_]+", re.sub(r"^(?:(?:m\s*/\s*s|the)\b[\s.:-]*)+", "", form["name"].lower()))
         if first_label in WEBMAIL:
