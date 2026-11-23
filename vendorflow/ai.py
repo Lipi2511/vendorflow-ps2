@@ -78,7 +78,7 @@ class Assistance:
                                 "Keep the exact subject. Add no requirements. Mention no internal records, SUP numbers, "
                                 "register, fraud, blocks or risk. Do not promise approval.",
                                 json.dumps(dict(subject=subject, reference_line=f"Case reference: {reference}",
-                                                permitted_openings=OPENINGS, checks=codes, actions=numbered)))
+                                                checks=codes, actions=numbered)))
         body = proposal.get("body", "")
         if (proposal.get("subject") == subject and isinstance(body, str) and len(body.split()) <= 150
                 and all(" ".join(action.lower().split()) in " ".join(body.lower().split()) for action in actions)
