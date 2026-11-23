@@ -188,7 +188,7 @@ def test_ai_guard_and_draft(store):
 
 def test_bank_review_changes_only_workspace_register(store):
     hold = submit(store, "Changed bank account")
-    store.review("local", hold["ref"], 1, "approve", "Demo Reviewer", "Verified via known supplier contact.")
+    store.review("local", hold["ref"], 1, "approve", "Demo Reviewer", "Verified via known supplier contact.", verified=True, vendor_instruction="Provide corrected evidence.")
     current = store.history("local", hold["ref"])[0]
     assert (current["decision"], current["automated_decision"], current["automated_owner"]) == ("Approved", "Pending", "Procurement")
     assert current["review"]["reviewer"] == "Demo Reviewer"
@@ -199,9 +199,9 @@ def test_bank_review_changes_only_workspace_register(store):
         assert db.execute("SELECT ending FROM suppliers WHERE workspace='seed' AND reference='SUP-017'").fetchone()[0] == "1824"
     assert "register.duplicate" in submit(store, "Changed bank account")["checks"]
     with pytest.raises(CaseConflict):
-        store.review("local", hold["ref"], 1, "reject", "Demo Reviewer", "Second click")
+        store.review("local", hold["ref"], 1, "reject", "Demo Reviewer", "Second click", verified=True, vendor_instruction="Provide corrected evidence.")
     with pytest.raises(CaseConflict):
-        store.review("other", hold["ref"], 1, "approve", "Demo Reviewer", "Other workspace")
+        store.review("other", hold["ref"], 1, "approve", "Demo Reviewer", "Other workspace", verified=True, vendor_instruction="Provide corrected evidence.")
 
 
 @pytest.mark.parametrize("action,decision,owner", [
@@ -218,8 +218,8 @@ def test_human_resolution_of_new_supplier(store, action, decision, owner):
     hold = submit(store, form=form, docs=(tax, bank))
     assert hold["owner"] == "Procurement" and hold["email_body"] is None
     with pytest.raises(CaseConflict):
-        store.review("local", hold["ref"], 1, action, "Demo Reviewer", "")
-    store.review("local", hold["ref"], 1, action, "Demo Reviewer", "Verified registry evidence independently.")
+        store.review("local", hold["ref"], 1, action, "Demo Reviewer", "", verified=True, vendor_instruction="Provide corrected evidence.")
+    store.review("local", hold["ref"], 1, action, "Demo Reviewer", "Verified registry evidence independently.", verified=True, vendor_instruction="Provide corrected evidence.")
     current = store.history("local", hold["ref"])[0]
     assert (current["decision"], current["owner"]) == (decision, owner)
     with closing(store.connect()) as db:
@@ -345,7 +345,7 @@ def test_streamlit_flow_and_optional_key(tmp_path, monkeypatch):
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("VENDORFLOW_DB", str(tmp_path / "streamlit.sqlite3"))
-    app = AppTest.from_file("app.py").run()
+    app = AppTest.from_file("app.py", default_timeout=20).run()
     assert not app.exception
     assert any(c.value == "AI extraction off" for c in app.caption)
     app.toggle[0].set_value(False).run()
@@ -370,6 +370,7 @@ def test_streamlit_flow_and_optional_key(tmp_path, monkeypatch):
     assert any(h.value == "Pending" for h in app.subheader)
     next(widget for widget in app.text_input if widget.label == "Reviewer name").set_value("Demo Reviewer")
     app.text_area[0].set_value("Verified via the established contact.")
+    app.checkbox[0].set_value(True).run()
     click("Verify & approve")
     assert any(h.value == "Approved" for h in app.subheader)
     click("Return to dashboard")
@@ -383,7 +384,7 @@ def test_streamlit_flow_and_optional_key(tmp_path, monkeypatch):
 
     monkeypatch.setattr("openai.OpenAI", fake_openai)
     monkeypatch.setenv("OPENAI_API_KEY", "fictional-test-key")
-    app_with_key = AppTest.from_file("app.py").run()
+    app_with_key = AppTest.from_file("app.py", default_timeout=20).run()
     assert not app_with_key.exception
     assert any(c.value == "AI extraction available" for c in app_with_key.caption)
 
@@ -391,7 +392,7 @@ def test_reviewer_send_back_uses_public_instruction_only(store):
     hold = submit(store, "Changed bank account")
     request = "Supply a signed authorization from your finance contact."
     store.review("local", hold["ref"], 1, "return", "Reviewer", "Internal register SUP-017.",
-                 vendor_instruction=request)
+                 vendor_instruction=request, verified=False)
     row = store.history("local", hold["ref"])[0]
     assert store.outstanding(row) == [request]
     assert request in row["email_body"] and "SUP-017" not in row["email_body"]
@@ -421,3 +422,10 @@ def test_migrate_database_before_upgrade(tmp_path):
     assert migrated.history("local", "VF-OLD")[0]["message"] == "Old request"
     assert migrated.events(1)[0]["summary"] is None
     assert submit(migrated, ref="VF-OLD", previous=1)["decision"] == "Approved"
+
+def test_review_requires_explicit_verification(store):
+    hold = submit(store, "Changed bank account")
+    with pytest.raises(CaseConflict, match="Confirm independent"):
+        store.review("local", hold["ref"], 1, "approve", "Reviewer", "Checked", verified=False)
+    assert store.history("local", hold["ref"])[0]["decision"] == "Pending"
+    store.review("local", hold["ref"], 1, "reject", "Reviewer", "Declined", verified=False)

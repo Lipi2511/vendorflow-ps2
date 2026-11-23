@@ -301,19 +301,22 @@ def case_detail(ref):
     elif row["id"] == current["id"] and (status, row["owner"]) == ("Pending", "Procurement"):
         with st.expander("Reviewer panel", expanded=True):
             st.caption("Verify the evidence independently and record the method or reference. This demo workspace uses a shared reviewer view.")
-            with st.form(f"review-{row['id']}"):
-                reviewer = st.text_input("Reviewer name", max_chars=120)
-                note = st.text_area("Internal verification note", max_chars=2000)
-                vendor_instruction = st.text_input("Vendor instruction (optional for send-back)", max_chars=240)
-                approve_col, reject_col, return_col = st.columns(3)
-                approve = approve_col.form_submit_button("Verify & approve", type="primary")
-                reject = reject_col.form_submit_button("Reject")
-                send_back = return_col.form_submit_button("Send back to vendor")
+            review_key = f"review-{row['id']}-"
+            reviewer = st.text_input("Reviewer name", max_chars=120, key=review_key+"name")
+            note = st.text_area("Internal verification note", max_chars=2000, key=review_key+"note")
+            vendor_instruction = st.text_input("Vendor instruction", max_chars=240, key=review_key+"instruction")
+            verified = st.checkbox("I verified this independently through the supplier's established contact",
+                                   key=review_key+"verified")
+            ready = bool(reviewer.strip() and note.strip())
+            approve_col, reject_col, return_col = st.columns(3)
+            approve = approve_col.button("Verify & approve", type="primary", disabled=not (ready and verified))
+            reject = reject_col.button("Reject", disabled=not ready)
+            send_back = return_col.button("Send back to vendor", disabled=not (ready and vendor_instruction.strip()))
             if approve or reject or send_back:
                 action = "approve" if approve else "reject" if reject else "return"
                 try:
                     store.review(workspace, ref, row["attempt"], action, reviewer, note,
-                                 vendor_instruction=vendor_instruction)
+                                 verified=verified, vendor_instruction=vendor_instruction)
                 except CaseConflict as exc:
                     st.error(str(exc))
                 else:

@@ -168,10 +168,14 @@ class Store:
         return db.execute("""SELECT * FROM suppliers WHERE workspace IN ('seed',?) AND gst=?
                              ORDER BY workspace='seed',workspace LIMIT 1""", (workspace, gst)).fetchone()
 
-    def review(self, workspace, ref, attempt, action, reviewer, note, *, vendor_instruction=""):
+    def review(self, workspace, ref, attempt, action, reviewer, note, *, verified, vendor_instruction=""):
         reviewer, note = reviewer.strip(), note.strip()
         if not reviewer or not note:
             raise CaseConflict("Enter a reviewer name and verification note.")
+        if action == "approve" and verified is not True:
+            raise CaseConflict("Confirm independent verification before approving this case.")
+        if action == "return" and not vendor_instruction.strip():
+            raise CaseConflict("Enter a vendor instruction before sending this case back.")
         options = {
             "approve": ("Approved", "Complete", "Procurement verified the application and approved internal onboarding."),
             "reject": ("Rejected", "Procurement", "Procurement declined the application. Contact the team with this reference to request a review."),
