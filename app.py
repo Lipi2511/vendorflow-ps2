@@ -3,6 +3,7 @@ import html
 import json
 import os
 import re
+from time import perf_counter, sleep
 from uuid import uuid4
 from urllib.parse import quote, urlencode
 
@@ -12,7 +13,7 @@ from vendorflow.ai import Assistance
 from vendorflow.examples import EXAMPLES, STATES, sample_files, sample_form, sample_pack
 from vendorflow.policy import LABELS
 from vendorflow.store import CaseConflict, Store
-from vendorflow.workflow import execute
+from vendorflow.workflow import STAGES, execute
 
 st.set_page_config(page_title="VendorFlow | Procurement", page_icon="📁", layout="wide")
 st.markdown("""<style>
@@ -70,6 +71,7 @@ with st.sidebar:
     st.header("VendorFlow")
     st.caption("PROCUREMENT WORKSPACE")
     st.caption("AI extraction available" if ai else "AI extraction off")
+    demo_pacing = st.toggle("Demo pacing", value=True)
     if st.button("Dashboard", icon=":material/dashboard:", width="stretch"):
         navigate("Dashboard")
     if st.button("New application", icon=":material/add:", width="stretch", type="primary"):
@@ -179,18 +181,30 @@ def intake(ref=None):
         if not form["name"].strip() or not (tax or bank):
             return
         with st.status("Processing application", expanded=True) as live:
-            stages = {}
-            def notify(stage, state):
-                if stage not in stages:
-                    stages[stage] = live.empty()
-                stages[stage].write(f"{stage} · {state}")
+            stages = {stage: live.empty() for stage in STAGES}
+            starts = {}
+            for stage, slot in stages.items():
+                slot.text(f"○  {stage}")
+
+            def notify(stage, state, summary):
+                if state == "Running":
+                    starts[stage] = perf_counter()
+                elif demo_pacing:
+                    sleep(max(0., .7 - (perf_counter() - starts[stage])) if stage in starts else 0.)
+                icon = {"Running": "⏳", "Complete": "✓", "Issues": "⚠", "Failed": "✕"}[state]
+                stages[stage].text(f"{icon}  {stage}" + (f" · {summary}" if summary else " · Running"))
+                if demo_pacing and stage == STAGES[0]:
+                    sleep(.7)
             try:
                 result = execute(store, workspace, eid, form, tax, bank, ref=ref,
                                  previous=previous, notify=notify, ai=ai)
             except CaseConflict as exc:
                 st.error(str(exc))
                 return
-            live.update(label="Run recorded", state="complete")
+            failed = store.history(workspace, result)[0]["state"] == "Failed"
+            live.update(label="Run failed" if failed else "Run recorded", state="error" if failed else "complete")
+            if demo_pacing:
+                sleep(1.5)
         ss.drafts[result] = dict(example=example, form=form, tax=tax, bank=bank)
         navigate("Case", result)
 
@@ -208,6 +222,16 @@ def case_detail(ref):
     row = next(r for r in history if r["attempt"] == attempt)
     status = row["decision"] or row["state"]
     st.caption(timestamp(row["started"]))
+    with st.expander("Execution history", expanded=True):
+        for event in store.events(row["id"]):
+            icon = {"Running": "⏳", "Complete": "✓", "Issues": "⚠", "Failed": "✕"}.get(event["state"], "○")
+            st.text(f"{icon}  {event['stage']} · {event['state']}" + (f" · {event['summary']}" if event["summary"] else ""))
+            finish = event["finished"]
+            duration = (datetime.fromisoformat(finish) - datetime.fromisoformat(event["started"])).total_seconds() if finish else None
+            detail = f"Started {timestamp(event['started'])}"
+            if duration is not None:
+                detail += f" · Finished {timestamp(finish)} · {duration * 1000:.0f} ms"
+            st.caption(detail)
     with st.container(border=True):
         st.subheader(status)
         st.caption(f"Next action owner · {row['owner'] or 'Processing'}")
@@ -233,15 +257,6 @@ def case_detail(ref):
         for field, reading in (check.get("readings") or {}).items():
             badge = "Read by rules" if reading["method"] == "regex" else f"Read by AI · {reading['confidence']:.2f}"
             st.caption(f"{LABELS[field]} · {badge} · {reading['evidence']}")
-    with st.expander("Execution history", expanded=True):
-        for event in store.events(row["id"]):
-            st.text(f"{event['stage']}  ·  {event['state']}")
-            finish = event["finished"]
-            duration = (datetime.fromisoformat(finish) - datetime.fromisoformat(event["started"])).total_seconds() if finish else None
-            detail = f"Started {timestamp(event['started'])}"
-            if duration is not None:
-                detail += f" · Finished {timestamp(finish)} · {duration * 1000:.0f} ms"
-            st.caption(detail)
     if st.button("Return to dashboard"):
         navigate("Dashboard")
 

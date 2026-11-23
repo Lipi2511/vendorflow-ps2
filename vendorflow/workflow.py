@@ -56,6 +56,29 @@ def decide(checks):
     return "Approved", "Complete", "Approved for internal onboarding. Bank ownership verification is required before payment."
 
 
+STAGES = ("Receive", "Read documents", "Validate form", "Cross-check evidence",
+          "Fraud & register checks", "Decide & draft message")
+
+
+def check_summary(checks):
+    issues = sum(not check.passed for check in checks)
+    if not checks:
+        return "No additional comparisons were available."
+    return f"{len(checks)} checks · {issues} observations" if issues else f"{len(checks)} checks passed."
+
+
+def reading_summary(checks):
+    entries = []
+    for title, check, required in zip(("GST certificate", "Bank letter"), checks,
+                                      (("name", "gst"), ("holder", "account", "ifsc"))):
+        readings = check.readings or {}
+        found = [readings[field] for field in required if field in readings]
+        assisted = [entry["confidence"] for entry in found if entry["method"] != "regex"]
+        method = f" · AI ({min(assisted):.2f})" if assisted else ""
+        entries.append(f"{title}: {len(found)}/{len(required)} fields{method}")
+    return " | ".join(entries)
+
+
 def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previous=0, notify=None, ai=None):
     if not form.get("name", "").strip() or not (tax_pdf or bank_pdf):
         raise CaseConflict("Enter a legal name and attach at least one document before running the checks.")
@@ -63,15 +86,21 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
     if not created:
         return row["ref"]
     run = row["id"]
-    notify = notify or (lambda stage, state: None)
+    notify = notify or (lambda stage, state, summary: None)
     checks = []
 
-    def stage(name, work):
+    def stage(name, work, summarize=check_summary):
+        nonlocal active
+        active = name
         store.stage(run, name, "Running")
-        notify(name, "Running")
+        notify(name, "Running", "")
+        before = len(checks)
         result = work()
-        store.stage(run, name, "Complete")
-        notify(name, "Complete")
+        findings = checks[before:]
+        summary = summarize(findings)
+        state = "Issues" if any(not c.passed for c in findings) else "Complete"
+        store.stage(run, name, state, summary)
+        notify(name, state, summary)
         return result
 
     def documents():
@@ -84,18 +113,36 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
         checks.extend([tax_check, bank_check])
         return tax, bank
 
+    active = STAGES[0]
     try:
-        notify("Receive application", "Complete")
-        tax, bank = stage("Read uploaded documents", documents)
-        stage("Validate form", lambda: checks.extend(field_checks(form)))
-        stage("Compare evidence", lambda: checks.extend(compare_documents(form, tax, bank)))
-        last = "Check supplier register and issue decision"
+        notify(active, "Complete", "Application received and recorded.")
+        tax, bank = stage(STAGES[1], documents, reading_summary)
+        stage(STAGES[2], lambda: checks.extend(field_checks(form)))
+        stage(STAGES[3], lambda: checks.extend(compare_documents(form, tax, bank)))
+
+        def register():
+            with closing(store.connect()) as db:
+                checks.extend(register_checks(db, workspace, form, tax))
+
+        before = len(checks)
+        stage(STAGES[4], register)
+        last = active = STAGES[5]
         store.stage(run, last, "Running")
-        notify(last, "Running")
-        # Serialize lookup with enrollment to prevent two simultaneous approvals for one GSTIN.
+        notify(last, "Running", "")
+        # Prepare optional wording without holding a write lock. Recheck register atomically at enrollment.
+        decision, owner, message = decide(checks)
+        draft_actions = vendor_actions([c.data() for c in checks]) if owner == "Vendor" else []
+        draft_codes = [c.code for c in checks if not c.passed and c.severity == "vendor"]
+        if decision == "Rejected":
+            draft_actions = ["Contact procurement with this reference to request a review."]
+            draft_codes = ["onboarding.review_route"]
+        draft = ai.draft(row["ref"], draft_codes, draft_actions) if ai and draft_actions else None
         with closing(store.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            checks.extend(register_checks(db, workspace, form, tax))
+            checks[before:] = register_checks(db, workspace, form, tax)
+            risk_checks = checks[before:]
+            store.finish_stage(db, run, STAGES[4],
+                               "Issues" if any(not c.passed for c in risk_checks) else "Complete", check_summary(risk_checks))
             decision, owner, message = decide(checks)
             if decision == "Approved":
                 store.add_supplier(db, workspace, form, "Active", row["ref"])
@@ -103,18 +150,15 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
             actions = vendor_actions(evidence) if owner == "Vendor" else []
             if decision == "Rejected":
                 actions = ["Contact procurement with this reference to request a review."]
-            subject, body = template_email(row["ref"], actions) if actions else (None, None)
+            subject, body = (draft if draft and actions == draft_actions else
+                             template_email(row["ref"], actions)) if actions else (None, None)
             db.execute("""UPDATE runs SET state='Complete',decision=?,owner=?,message=?,checks=?,email_subject=?,email_body=? WHERE id=?""",
                        (decision, owner, message, json.dumps(evidence), subject, body, run))
-            db.execute("UPDATE events SET state='Complete',finished=? WHERE run=? AND stage=?", (now(), run, last))
-        if ai and actions:
-            codes = [c.code for c in checks if not c.passed and c.severity == "vendor"] if owner == "Vendor" else ["onboarding.review_route"]
-            subject, body = ai.draft(row["ref"], codes, actions)
-            with closing(store.connect()) as db, db:
-                db.execute("UPDATE runs SET email_subject=?,email_body=? WHERE id=? AND owner=?",
-                           (subject, body, run, owner))
-        notify(last, "Complete")
+            summary = f"{decision} · {owner}" + (" · email draft prepared" if subject else "")
+            store.finish_stage(db, run, last, "Complete", summary)
+        notify(last, "Complete", summary)
     except Exception:
         logging.exception("Workflow interrupted for %s", row["ref"])
         store.fail(run, [c.data() for c in checks])
+        notify(active, "Failed", "Processing failed. Retry this application.")
     return row["ref"]

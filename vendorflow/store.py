@@ -62,6 +62,9 @@ class Store:
             ]:
                 form = sample_form(example)
                 self.add_supplier(db, "seed", form | {"account": account}, status, ref, seed=True)
+            event_columns = {row["name"] for row in db.execute("PRAGMA table_info(events)")}
+            if "summary" not in event_columns:
+                db.execute("ALTER TABLE events ADD COLUMN summary TEXT")
             # Abandoned workers can be retried after a bounded processing window.
             stale = "state='Running' AND julianday(started)<julianday('now','-10 minutes')"
             db.execute(f"""UPDATE events SET state='Failed',finished=? WHERE state='Running'
@@ -101,17 +104,21 @@ class Store:
             cur = db.execute("""INSERT INTO runs(workspace,ref,attempt,token,name,started,state)
                              VALUES(?,?,?,?,?,?,'Running')""",
                              (workspace, ref, previous+1, token, name[:120] or "Unnamed applicant", received))
-            db.execute("INSERT INTO events VALUES(?,?,?,?,?)",
-                       (cur.lastrowid, "Receive application", received, now(), "Complete"))
+            db.execute("INSERT INTO events(run,stage,started,finished,state,summary) VALUES(?,?,?,?,?,?)",
+                       (cur.lastrowid, "Receive", received, now(), "Complete", "Application received and recorded."))
             return db.execute("SELECT * FROM runs WHERE id=?", (cur.lastrowid,)).fetchone(), True
 
-    def stage(self, run, name, state):
+    def stage(self, run, name, state, summary=None):
         with closing(self.connect()) as db, db:
             if state == "Running":
-                db.execute("INSERT INTO events VALUES(?,?,?,NULL,?)", (run, name, now(), state))
+                db.execute("INSERT INTO events(run,stage,started,state,summary) VALUES(?,?,?,?,?)", (run, name, now(), state, summary))
             else:
-                db.execute("UPDATE events SET state=?,finished=? WHERE run=? AND stage=?",
-                           (state, now(), run, name))
+                self.finish_stage(db, run, name, state, summary)
+
+    @staticmethod
+    def finish_stage(db, run, name, state, summary):
+        db.execute("UPDATE events SET state=?,finished=?,summary=? WHERE run=? AND stage=?",
+                   (state, now(), summary, run, name))
 
     def history(self, workspace, ref):
         with closing(self.connect()) as db:
@@ -129,7 +136,7 @@ class Store:
 
     def fail(self, run, checks):
         with closing(self.connect()) as db, db:
-            db.execute("UPDATE events SET state='Failed',finished=? WHERE run=? AND state='Running'", (now(), run))
+            db.execute("UPDATE events SET state='Failed',finished=?,summary='Processing failed. Retry this application.' WHERE run=? AND state='Running'", (now(), run))
             db.execute("""UPDATE runs SET state='Failed',owner='Operator',message=?,checks=?
                         WHERE id=? AND state='Running'""",
                        ("Processing failed. Retry this application under the same reference.", json.dumps(checks), run))

@@ -35,7 +35,9 @@ def test_cases(store, example, decision, owner, rule):
     assert row["message"] and row["state"] == "Complete"
     checks = json.loads(row["checks"])
     assert any(c["code"] == rule and c["passed"] == (decision == "Approved") for c in checks)
-    assert all(e["finished"] and e["state"] == "Complete" for e in store.events(row["id"]))
+    events = store.events(row["id"])
+    assert tuple(e["stage"] for e in events) == workflow.STAGES
+    assert all(e["finished"] and e["summary"] and e["state"] in ("Complete", "Issues") for e in events)
 
 
 def test_correction_and_idempotency(store):
