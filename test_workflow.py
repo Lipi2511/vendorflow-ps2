@@ -458,6 +458,93 @@ def test_ai_email_validation(variant):
     assert result.method == ("ai" if variant == "valid" else "template")
     assert result.body == (body if variant == "valid" else fallback)
 
+class ScriptedClient:
+    """Fake OpenAI client that returns or raises each scripted outcome in order."""
+    def __init__(self, *outcomes, api_key="sk-fictionalsecretvalue"):
+        from types import SimpleNamespace
+        self.outcomes, self.calls, self.api_key = list(outcomes), [], api_key
+        self.chat = SimpleNamespace(completions=self)
+
+    def create(self, **kwargs):
+        from types import SimpleNamespace
+        self.calls.append(kwargs)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        message = SimpleNamespace(content=json.dumps(outcome))
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def provider_error(kind, status, message):
+    import httpx
+    response = httpx.Response(status, request=httpx.Request("POST", "https://provider.example/v1/chat/completions"))
+    return kind(f"Error code: {status}", response=response, body={"message": message})
+
+
+def test_json_schema_rejection_retries_with_json_object():
+    from openai import BadRequestError
+    from vendorflow.ai import EMAIL, Assistance
+    answer = dict(subject="Subject", body="Body")
+    client = ScriptedClient(provider_error(BadRequestError, 400, "response_format json_schema is unsupported"), answer)
+    ai = Assistance(client=client)
+    assert ai.request("vendor_email", EMAIL, "Write an email.", "Input") == answer
+    assert [call["response_format"]["type"] for call in client.calls] == ["json_schema", "json_object"]
+    system = client.calls[1]["messages"][0]["content"]
+    assert "JSON schema" in system and '"subject"' in system
+    assert ai.last_error is None
+
+
+def test_provider_error_is_visible_without_secrets(caplog):
+    from openai import AuthenticationError
+    from vendorflow.ai import EMAIL, Assistance
+    client = ScriptedClient(provider_error(AuthenticationError, 401,
+                                           "Incorrect API key provided: sk-fictionalsecretvalue. Account 710000000146."))
+    ai = Assistance(client=client)
+    assert ai.request("vendor_email", EMAIL, "Write an email.", "PRIVATE DOCUMENT TEXT") == {}
+    assert len(client.calls) == 1
+    assert "AuthenticationError" in ai.last_error and "HTTP 401" in ai.last_error
+    assert "Incorrect API key" in ai.last_error
+    for text in (ai.last_error, caplog.text):
+        assert "fictionalsecret" not in text and "710000000146" not in text and "PRIVATE DOCUMENT" not in text
+    assert "HTTP 401" in caplog.text
+
+
+def test_connection_reports_success_and_clears_error():
+    from openai import RateLimitError
+    from vendorflow.ai import Assistance
+    ai = Assistance(client=ScriptedClient(provider_error(RateLimitError, 429, "Quota exceeded"), dict(ok=True)),
+                    model="fictional-model")
+    assert ai.test_connection() == (False, "RateLimitError · HTTP 429 · Quota exceeded")
+    assert ai.test_connection() == (True, "Connected · fictional-model")
+    assert ai.last_error is None
+
+
+@pytest.mark.parametrize("extra,method", [("", "ai"), ("Your fraud check is pending.", "template"),
+                                          ("We guaranteed this.", "template")])
+def test_pan_mismatch_email_filter_ignores_required_action_only(extra, method):
+    from vendorflow.ai import Assistance
+    ref = "VF-EXAMPLE"
+    action = "Provide the GSTIN registered to this company."
+    subject = f"Vendor onboarding update · {ref}"
+    body = f"Dear vendor,\nPlease help us continue. {extra}\n1. {action}\nThank you.\nCase reference: {ref}"
+    result = Assistance(client=ScriptedClient(dict(subject=subject, body=body))).draft(ref, ["form.pan_type"], [action])
+    assert result.method == method
+
+
+def test_sidebar_surfaces_connection_failure(tmp_path, monkeypatch):
+    from openai import AuthenticationError
+    from streamlit.testing.v1 import AppTest
+    failure = provider_error(AuthenticationError, 401, "Invalid credentials")
+    monkeypatch.setattr("openai.OpenAI", lambda **kwargs: ScriptedClient(failure, api_key=kwargs["api_key"]))
+    monkeypatch.setenv("OPENAI_API_KEY", f"fictional-{uuid4().hex}")
+    monkeypatch.setenv("VENDORFLOW_DB", str(tmp_path / "streamlit.sqlite3"))
+    app = AppTest.from_file("app.py", default_timeout=20).run()
+    next(b for b in app.button if b.label == "Test AI connection").click().run()
+    assert not app.exception
+    assert any(c.value == "AI configured but failing" for c in app.caption)
+    assert any("HTTP 401 · Invalid credentials" in t.value for t in app.text)
+
+
 def test_scanned_bank_confirmation_is_reported_as_document_risk():
     from vendorflow.reporting import case_flags, evidence_groups, pending_reasons
     check = dict(code="bank.vision_confirmation", passed=False, severity="procurement", detail="", action="")

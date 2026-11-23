@@ -138,6 +138,7 @@ def read_document(data, kind, ai=None):
     if ai and any(key not in fields for key in required):
         result = ai.extract(text[:60000], images)
         doc_type = result.get("document_type")
+        doc_type = doc_type if isinstance(doc_type, str) else None  # JSON-object fallback has no schema enforcement.
         if doc_type in {"gst_certificate", "bank_letter"} and doc_type != expected_type:
             # On text PDFs the classification must also be corroborated by recognizable content.
             marker = r"gst|registration certificate" if kind == "bank" else r"bank|ifsc|account holder"

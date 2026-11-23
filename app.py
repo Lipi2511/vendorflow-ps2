@@ -35,12 +35,16 @@ def setting(name):
 
 
 @st.cache_resource(show_spinner=False)
-def assistance(key, model):
-    return Assistance(key, model=model)
+def assistance(key, model, base_url):
+    from openai import OpenAI
+
+    client = OpenAI(api_key=key, base_url=base_url or None, timeout=20.0, max_retries=1)
+    return Assistance(client=client, model=model)
 
 
 key_from_settings = setting("OPENAI_API_KEY")
-ai = assistance(key_from_settings, setting("VENDORFLOW_MODEL")) if key_from_settings else None
+ai = (assistance(key_from_settings, setting("VENDORFLOW_MODEL"), setting("OPENAI_BASE_URL"))
+      if key_from_settings else None)
 ss = st.session_state
 if not re.fullmatch(r"[a-f0-9]{32}", st.query_params.get("w", "")):
     st.query_params["w"] = uuid4().hex
@@ -76,7 +80,20 @@ def timestamp(value):
 with st.sidebar:
     st.header("VendorFlow")
     st.caption("PROCUREMENT WORKSPACE")
-    st.caption(f"AI extraction **on** · {ai.model}" if ai else "AI extraction off (no API key)")
+    ai_status = st.empty()
+    if ai and st.button("Test AI connection", icon=":material/network_check:", width="stretch"):
+        with st.spinner("Testing connection"):
+            connected, result_text = ai.test_connection()
+        if connected:
+            st.success(result_text)
+        else:
+            st.text(result_text)
+    if ai and ai.last_error:
+        with ai_status.container():
+            st.caption("AI configured but failing")
+            st.text(ai.last_error)
+    else:
+        ai_status.caption(f"AI extraction **on** · {ai.model}" if ai else "AI extraction off (no API key)")
     demo_pacing = st.toggle("Demo pacing", value=True)
     if st.button("Dashboard", icon=":material/dashboard:", width="stretch"):
         navigate("Dashboard")
