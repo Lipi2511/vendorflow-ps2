@@ -269,3 +269,16 @@ def test_dashboard_counts_latest_cases_and_filters(store):
     submit(store, "Wrong document", docs=(tax, correct), ref=pending["ref"], previous=1)
     assert dashboard_metrics(store.latest("local"))["Applications"] == 3
     assert "Bank document needs review" not in pending_reasons(store.latest("local"))
+
+def test_case_presentation_and_preview(store):
+    from vendorflow.reporting import attempt_label, evidence_groups, preview_pdf
+    row = submit(store, "Changed bank account")
+    assert attempt_label(row) == "Attempt 1 · Pending (Procurement)"
+    groups = evidence_groups(json.loads(row["checks"]))
+    assert any(check["code"] == "register.bank_change" for check in groups["Fraud & register"])
+    assert groups["Documents"] and groups["Cross-checks"] and groups["Soft flags"]
+    tax, bank = sample_files("New supplier")[:2]
+    assert preview_pdf(tax).startswith(b"\x89PNG")
+    assert preview_pdf(bank, bank=True).startswith(b"\x89PNG")
+    assert preview_pdf(bank, bank=True) != preview_pdf(bank)
+    assert preview_pdf(b"bad input") is None

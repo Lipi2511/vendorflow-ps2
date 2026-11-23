@@ -12,7 +12,8 @@ import streamlit as st
 from vendorflow.ai import Assistance
 from vendorflow.examples import EXAMPLES, STATES, sample_files, sample_form, sample_pack
 from vendorflow.policy import LABELS
-from vendorflow.reporting import case_flags, dashboard_metrics, filter_cases, pending_reasons
+from vendorflow.reporting import (attempt_label, case_flags, dashboard_metrics, evidence_groups,
+                                  filter_cases, pending_reasons, preview_pdf)
 from vendorflow.store import CaseConflict, Store
 from vendorflow.workflow import STAGES, execute
 
@@ -44,6 +45,7 @@ if not re.fullmatch(r"[a-f0-9]{32}", st.query_params.get("w", "")):
 workspace = st.query_params["w"]
 store = Store()
 ss.setdefault("drafts", {})
+ss.setdefault("attempt_files", {})
 ss.setdefault("editor", uuid4().hex)
 ss.setdefault("screen", "Case" if st.query_params.get("case") else "Dashboard")
 
@@ -225,7 +227,16 @@ def intake(ref=None):
             if demo_pacing:
                 sleep(1.5)
         ss.drafts[result] = dict(example=example, form=form, tax=tax, bank=bank)
+        ss.attempt_files[(result, previous + 1)] = ss.drafts[result]
         navigate("Case", result)
+
+
+def show_evidence(check):
+    prefix = "✓" if check["passed"] else "Info" if check.get("severity") == "info" else "Review"
+    st.text(f"{prefix} · {check['detail']}")
+    for field, reading in (check.get("readings") or {}).items():
+        badge = "Read by rules" if reading["method"] == "regex" else f"Read by AI · {reading['confidence']:.2f}"
+        st.caption(f"{LABELS[field]} · {badge} · {reading['evidence']}")
 
 
 def case_detail(ref):
@@ -237,10 +248,31 @@ def case_detail(ref):
     st.caption(f"CASE RECORD   /   {ref}")
     st.title(current["name"])
     options = [r["attempt"] for r in history]
-    attempt = st.selectbox("Attempt history", options, format_func=lambda n: f"Attempt {n}" + (" · latest" if n==options[0] else ""))
+    labels = {item["attempt"]: attempt_label(item) for item in history}
+    attempt = st.selectbox("Attempt history", options, format_func=labels.__getitem__, key=f"attempt-{ref}-{current['attempt']}")
     row = next(r for r in history if r["attempt"] == attempt)
     status = row["decision"] or row["state"]
+    checks = json.loads(row["checks"])
+    files = ss.attempt_files.get((ref, attempt), {})
     st.caption(timestamp(row["started"]))
+    with st.container(border=True):
+        color = {"Approved": "green", "Pending": "orange", "Rejected": "red", "Failed": "red"}.get(status, "gray")
+        st.badge(status, color=color)
+        st.subheader(status, anchor=False)
+        st.caption(f"Next action owner · {row['owner'] or 'Processing'}")
+        finding = next((check["detail"] for check in checks if not check["passed"] and
+                        check.get("severity", "vendor") in {"block", "procurement", "vendor"}), "")
+        if row["review"]:
+            st.text(row["message"])
+            st.badge("Procurement reviewed", color="blue")
+        elif status == "Approved":
+            st.text("Approved for internal onboarding. Bank ownership verification is required before payment.")
+        elif finding:
+            st.text(finding)
+        if any(item["method"] != "regex" for check in checks for item in (check.get("readings") or {}).values()):
+            st.badge("AI-assisted reading", color="violet")
+        elif any(check.get("readings") for check in checks):
+            st.badge("Rule-based reading", color="gray")
     with st.expander("Execution history", expanded=True):
         for event in store.events(row["id"]):
             icon = {"Running": "⏳", "Complete": "✓", "Issues": "⚠", "Failed": "✕"}.get(event["state"], "○")
@@ -252,8 +284,6 @@ def case_detail(ref):
                 detail += f" · Finished {timestamp(finish)} · {duration * 1000:.0f} ms"
             st.caption(detail)
     with st.container(border=True):
-        st.subheader(status)
-        st.caption(f"Next action owner · {row['owner'] or 'Processing'}")
         st.markdown("**Vendor response**")
         st.text(row["message"] or "Processing is in progress. Refresh this case for an update.")
         if row["id"] == current["id"] and (status == "Failed" or row["owner"] == "Vendor"):
@@ -287,19 +317,37 @@ def case_detail(ref):
         with st.expander("Email to vendor", expanded=True):
             st.text(row["email_subject"])
             st.code(row["email_body"], language=None)
-            recipient = ss.drafts.get(ref, {}).get("form", {}).get("email", "")
+            recipient = files.get("form", {}).get("email", "")
             email_query = urlencode(dict(subject=row["email_subject"], body=row["email_body"]), quote_via=quote)
             link = f"mailto:{quote(recipient, safe='@.')}?{email_query}"
             st.markdown(f'<a href="{html.escape(link, quote=True)}">Open in your email app</a>', unsafe_allow_html=True)
     elif row["owner"] == "Procurement" and status == "Pending":
         st.info("Internal note · Procurement will verify the evidence before the vendor is asked to act.")
-    checks = json.loads(row["checks"])
-    st.subheader("Decision evidence")
-    for check in sorted(checks, key=lambda c: c["passed"]):
-        st.text(("✓  " if check["passed"] else "Review  ·  ") + check["detail"])
-        for field, reading in (check.get("readings") or {}).items():
-            badge = "Read by rules" if reading["method"] == "regex" else f"Read by AI · {reading['confidence']:.2f}"
-            st.caption(f"{LABELS[field]} · {badge} · {reading['evidence']}")
+    details, documents = st.columns([3, 2])
+    with details:
+        st.subheader("Decision evidence")
+        for group, findings in evidence_groups(checks).items():
+            failures = [c for c in findings if not c["passed"]]
+            passes = [c for c in findings if c["passed"]]
+            if failures:
+                with st.expander(group + " · observations", expanded=True):
+                    for check in failures:
+                        show_evidence(check)
+            if passes:
+                with st.expander(group + (" · passed" if failures else "")):
+                    for check in passes:
+                        show_evidence(check)
+    with documents:
+        st.subheader("Document previews")
+        if not files:
+            st.caption("Original files are available in the session that submitted this attempt.")
+        for kind, label in (("tax", "GST certificate"), ("bank", "Bank letter")):
+            if files.get(kind):
+                image = preview_pdf(files[kind], bank=kind == "bank")
+                if image:
+                    st.image(image, caption=label + " · first page", width="stretch")
+                else:
+                    st.caption(f"{label} preview unavailable. The evidence panel shows the recorded checks.")
     if st.button("Return to dashboard"):
         navigate("Dashboard")
 

@@ -64,3 +64,53 @@ def case_flags(row):
     return list(dict.fromkeys(reason_for(check) for check in json.loads(row["checks"])
                               if not check["passed"] and (check["code"] in RISK_CODES or
                               (check["code"].endswith(".document") and check.get("severity") == "procurement"))))
+
+def attempt_label(row):
+    status = row["decision"] or row["state"]
+    suffix = f" ({row['owner']})" if status == "Pending" and row["owner"] else ""
+    return f"Attempt {row['attempt']} · {status}{suffix}"
+
+
+def evidence_groups(checks):
+    categories = dict.fromkeys(("Documents", "Form", "Cross-checks", "Fraud & register", "Soft flags"))
+    groups = {key: [] for key in categories}
+    for check in checks:
+        code = check["code"]
+        if check.get("severity") == "info":
+            group = "Soft flags"
+        elif code.endswith(".document"):
+            group = "Documents"
+        elif code.startswith("compare."):
+            group = "Cross-checks"
+        elif code.startswith("register.") or code.startswith("case.") or code == "form.pan_initial":
+            group = "Fraud & register"
+        else:
+            group = "Form"
+        groups[group].append(check)
+    return groups
+
+
+def preview_pdf(data, *, bank=False):
+    import re
+
+    import pymupdf
+
+    try:
+        with pymupdf.open(stream=data, filetype="pdf") as document:
+            if document.needs_pass or not len(document):
+                return None
+            page = document[0]
+            if bank:
+                text = page.get_text()
+                # Keep an image-only document's account digits out of the rendered preview.
+                if not text.strip():
+                    return None
+                for block in page.get_text("blocks"):
+                    if block[6] != 0 or any(len(re.sub(r"[^0-9]", "", line)) >= 6
+                                             for line in block[4].splitlines()):
+                        page.add_redact_annot(pymupdf.Rect(block[:4]), fill=(.92, .94, .93), cross_out=False)
+                page.apply_redactions()
+            scale = min(1.5, 1200 / max(1, page.rect.width, page.rect.height))
+            return page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), annots=False).tobytes("png")
+    except (RuntimeError, ValueError, pymupdf.FileDataError):
+        return None
