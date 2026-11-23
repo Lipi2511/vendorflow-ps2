@@ -90,8 +90,6 @@ with st.sidebar:
             connected, result_text = ai.test_connection()
         if connected:
             st.success(result_text)
-        else:
-            st.text(result_text)
     if ai and ai.last_error:
         with ai_status.container():
             st.caption("AI configured but failing")
