@@ -63,7 +63,7 @@ class Store:
             db.executescript(SCHEMA)
             db.execute("BEGIN IMMEDIATE")
             columns = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
-            for column in ("email_subject", "email_body", "supplier_snapshot"):
+            for column in ("email_subject", "email_body", "supplier_snapshot", "submission_hash"):
                 if column not in columns:
                     db.execute(f"ALTER TABLE runs ADD COLUMN {column} TEXT")
             for example, status, account, ref in [
@@ -95,7 +95,7 @@ class Store:
                    (workspace, fingerprint(form["gst"]), form["name"], fingerprint(normalized("account", form["account"])),
                     normalized("account", form["account"])[-4:], form["ifsc"].upper(), status, ref))
 
-    def start(self, workspace, token, name, ref=None, previous=0):
+    def start(self, workspace, token, name, ref=None, previous=0, submission_hash=None):
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             prior = db.execute("SELECT * FROM runs WHERE workspace=? AND token=?", (workspace, token)).fetchone()
@@ -109,12 +109,15 @@ class Store:
                 last = self.outcome(db, last)
                 if last["state"] != "Failed" and (last["decision"], last["owner"]) != ("Pending", "Vendor"):
                     raise CaseConflict("This application does not accept vendor corrections. See the latest decision.")
+                if last["state"] != "Failed" and submission_hash and last["submission_hash"] == submission_hash:
+                    actions = self.outstanding(last)
+                    raise CaseConflict(f"Nothing changed since attempt {previous}. Please update: {' '.join(actions)}")
             else:
                 ref = "VF-" + uuid4().hex[:12].upper()
             received = now()
-            cur = db.execute("""INSERT INTO runs(workspace,ref,attempt,token,name,started,state)
-                             VALUES(?,?,?,?,?,?,'Running')""",
-                             (workspace, ref, previous+1, token, name[:120] or "Unnamed applicant", received))
+            cur = db.execute("""INSERT INTO runs(workspace,ref,attempt,token,name,started,state,submission_hash)
+                             VALUES(?,?,?,?,?,?,'Running',?)""",
+                             (workspace, ref, previous+1, token, name[:120] or "Unnamed applicant", received, submission_hash))
             db.execute("INSERT INTO events(run,stage,started,finished,state,summary) VALUES(?,?,?,?,?,?)",
                        (cur.lastrowid, "Receive", received, now(), "Complete", "Application received and recorded."))
             return db.execute("SELECT * FROM runs WHERE id=?", (cur.lastrowid,)).fetchone(), True
@@ -130,6 +133,18 @@ class Store:
     def finish_stage(db, run, name, state, summary):
         db.execute("UPDATE events SET state=?,finished=?,summary=? WHERE run=? AND stage=?",
                    (state, now(), summary, run, name))
+
+    @staticmethod
+    def outstanding(row):
+        return vendor_actions(json.loads(row["checks"])) or [row["message"] or "Update the submitted evidence."]
+
+    @staticmethod
+    def vendor_attempts(db, workspace, ref, before):
+        return db.execute("""SELECT COUNT(*) FROM runs
+            LEFT JOIN reviews ON reviews.run=runs.id
+            WHERE runs.workspace=? AND runs.ref=? AND runs.attempt<?
+            AND COALESCE(reviews.decision,runs.decision)='Pending'
+            AND COALESCE(reviews.owner,runs.owner)='Vendor'""", (workspace, ref, before)).fetchone()[0]
 
     @staticmethod
     def outcome(db, row):

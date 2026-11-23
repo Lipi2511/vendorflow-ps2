@@ -1,9 +1,10 @@
 from contextlib import closing
+from hashlib import sha256
 import json
 import logging
 
 from .ai import template_email, vendor_actions
-from .policy import Check, compare_documents, field_checks, normalized, read_document, valid_gst
+from .policy import LABELS, Check, compare_documents, field_checks, normalized, read_document, valid_gst
 from .store import CaseConflict, Store, fingerprint, now
 
 
@@ -91,10 +92,23 @@ def reading_summary(checks):
     return " | ".join(entries)
 
 
+def submission_digest(form, tax_pdf, bank_pdf):
+    fields = {key: normalized(key, form.get(key, "")) for key in LABELS}
+    uploads = [sha256(data).hexdigest() if data else None for data in (tax_pdf, bank_pdf)]
+    return sha256(json.dumps([fields, uploads], sort_keys=True).encode()).hexdigest()
+
+
+def raise_repeat_hold(db, workspace, row, checks):
+    repeats = Store.vendor_attempts(db, workspace, row["ref"], row["attempt"]) if row["attempt"] > 3 else 0
+    if repeats >= 3 and decide(checks)[:2] == ("Pending", "Vendor"):
+        checks.append(Check("case.repeated_corrections", False,
+                            "Repeated unsuccessful corrections. Procurement review needed.", severity="procurement"))
+
+
 def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previous=0, notify=None, ai=None):
     if not form.get("name", "").strip() or not (tax_pdf or bank_pdf):
         raise CaseConflict("Enter a legal name and attach at least one document before running the checks.")
-    row, created = store.start(workspace, token, form["name"], ref, previous)
+    row, created = store.start(workspace, token, form["name"], ref, previous, submission_digest(form, tax_pdf, bank_pdf))
     if not created:
         return row["ref"]
     run = row["id"]
@@ -152,6 +166,7 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
         with closing(store.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             checks[before:] = register_checks(db, workspace, form, tax)
+            raise_repeat_hold(db, workspace, row, checks)
             risk_checks = checks[before:]
             store.finish_stage(db, run, STAGES[4],
                                "Issues" if any(not c.passed for c in risk_checks) else "Complete", check_summary(risk_checks))

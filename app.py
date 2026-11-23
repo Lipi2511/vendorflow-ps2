@@ -138,6 +138,10 @@ def intake(ref=None):
         tax, bank, _ = sample_files(example)
     if ref and old:
         form, tax, bank = old["form"], old["tax"], old["bank"]
+    if ref and history[0]["owner"] == "Vendor":
+        st.markdown("**Outstanding corrections**")
+        for action in store.outstanding(history[0]):
+            st.text(f"☐ {action}")
     key = eid + example
     form = dict(form)
     with st.container():

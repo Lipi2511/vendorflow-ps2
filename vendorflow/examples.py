@@ -48,7 +48,7 @@ def pdf(title, rows):
         for i, (label, value) in enumerate(rows):
             page.insert_text((46, 162 + i * 34), f"{label}: {value}", fontsize=12)
         page.insert_text((46, 670), "Synthetic evidence for a procurement case study.", fontsize=10)
-        return doc.tobytes(deflate=True)
+        return doc.tobytes(deflate=True, no_new_id=True)
 
 
 def sample_files(example):

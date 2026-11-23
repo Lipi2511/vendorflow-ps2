@@ -224,3 +224,30 @@ def test_human_resolution_of_new_supplier(store, action, decision, owner):
     assert (current["decision"], current["owner"]) == (decision, owner)
     with closing(store.connect()) as db:
         assert db.execute("SELECT COUNT(*) FROM suppliers WHERE workspace='local'").fetchone()[0] == (action == "approve")
+
+def test_duplicate_correction_and_repeat_escalation(store):
+    first = submit(store, "Wrong document")
+    ref = first["ref"]
+    same = sample_form("Wrong document") | {"name":"Kite Paper Pvt. Ltd.", "account":"710000-000257"}
+    with pytest.raises(CaseConflict, match="Nothing changed since attempt 1"):
+        submit(store, "Wrong document", form=same, ref=ref, previous=1)
+    assert len(store.history("local", ref)) == 1
+    for previous in range(1, 4):
+        different = sample_form("Wrong document") | {"contact":f"Demo Contact {previous}"}
+        result = submit(store, "Wrong document", form=different, ref=ref, previous=previous)
+        assert result["owner"] == ("Vendor" if previous < 3 else "Procurement")
+    assert "Repeated unsuccessful corrections" in result["checks"]
+    assert result["email_body"] is None
+    with pytest.raises(CaseConflict):
+        submit(store, "Wrong document", ref=ref, previous=4)
+
+
+def test_fourth_attempt_can_resolve_the_case(store):
+    first = submit(store, "Wrong document")
+    ref = first["ref"]
+    for previous in (1, 2):
+        submit(store, "Wrong document", form=sample_form("Wrong document") | {"contact":str(previous)},
+               ref=ref, previous=previous)
+    tax, _, correct = sample_files("Wrong document")
+    result = submit(store, "Wrong document", docs=(tax, correct), ref=ref, previous=3)
+    assert result["decision"] == "Approved"
