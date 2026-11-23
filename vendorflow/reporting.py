@@ -7,6 +7,7 @@ from .policy import LABELS
 
 REASONS = {
     "tax.document": "GST document needs review", "bank.document": "Bank document needs review",
+    "bank.vision_confirmation": "Scanned bank details need confirmation",
     "register.bank_change": "Bank account changed", "register.shared_account": "Shared bank account",
     "register.duplicate": "Existing supplier record", "register.block": "Internal register hold",
     "form.pan_initial": "PAN name initial mismatch", "form.pan_type": "PAN entity type mismatch",
@@ -15,7 +16,8 @@ REASONS = {
     "form.bank_code": "Unknown IFSC bank code", "form.account_sanity": "Account looks like a placeholder",
     "case.repeated_corrections": "Repeated unsuccessful corrections",
 }
-RISK_CODES = {"register.bank_change", "register.shared_account", "form.pan_initial", "form.pan_type", "form.pan_match"}
+RISK_CODES = {"register.bank_change", "register.shared_account", "form.pan_initial", "form.pan_type", "form.pan_match",
+              "bank.vision_confirmation"}
 
 
 def dashboard_metrics(rows):
@@ -78,7 +80,7 @@ def evidence_groups(checks):
         code = check["code"]
         if check.get("severity") == "info":
             group = "Soft flags"
-        elif code.endswith(".document"):
+        elif code.endswith(".document") or code == "bank.vision_confirmation":
             group = "Documents"
         elif code.startswith("compare."):
             group = "Cross-checks"

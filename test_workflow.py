@@ -457,6 +457,16 @@ def test_ai_email_validation(variant):
     assert result.method == ("ai" if variant == "valid" else "template")
     assert result.body == (body if variant == "valid" else fallback)
 
+def test_scanned_bank_confirmation_is_reported_as_document_risk():
+    from vendorflow.reporting import case_flags, evidence_groups, pending_reasons
+    check = dict(code="bank.vision_confirmation", passed=False, severity="procurement", detail="", action="")
+    row = dict(decision="Pending", checks=json.dumps([check]))
+    reason = "Scanned bank details need confirmation"
+    assert evidence_groups([check])["Documents"] == [check]
+    assert pending_reasons([row]) == {reason: 1}
+    assert case_flags(row) == [reason]
+
+
 def test_leaving_intake_discards_a_queued_run(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
