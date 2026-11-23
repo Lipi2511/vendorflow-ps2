@@ -143,6 +143,45 @@ def intake(ref=None):
         previous = history[0]["attempt"]
         old = ss.drafts.get(ref, {})
     st.title("Correct application" if ref else "New supplier application")
+    top = st.empty()
+    if ss.get("running"):
+        pending = ss.running
+        form, tax, bank = pending["form"], pending["tax"], pending["bank"]
+        ref, previous, eid, example = (pending[k] for k in ("ref", "previous", "eid", "example"))
+        st.caption(f"{form['name']} · {form['gst']}" + (f" · {ref}" if ref else ""))
+        with top.container(), st.status("Processing application", expanded=True) as live:
+            stages = {stage: live.empty() for stage in STAGES}
+            starts = {}
+            for stage, slot in stages.items():
+                slot.text(f"○  {stage}")
+
+            def notify(stage, state, summary):
+                if state == "Running":
+                    starts[stage] = perf_counter()
+                elif demo_pacing:
+                    sleep(max(0., .7 - (perf_counter() - starts[stage])) if stage in starts else 0.)
+                icon = {"Running": "⏳", "Complete": "✓", "Issues": "⚠", "Failed": "✕"}[state]
+                stages[stage].text(f"{icon}  {stage}" + (f" · {summary}" if summary else " · Running"))
+                if demo_pacing and stage == STAGES[0]:
+                    sleep(.7)
+            try:
+                result = execute(store, workspace, eid, form, tax, bank, ref=ref,
+                                 previous=previous, notify=notify, ai=ai)
+            except CaseConflict as exc:
+                ss.pop("running", None)
+                ss.run_error = str(exc)
+                st.rerun()
+            failed = store.history(workspace, result)[0]["state"] == "Failed"
+            live.update(label="Run failed" if failed else "Run recorded", state="error" if failed else "complete")
+            if demo_pacing:
+                sleep(1.5)
+        ss.drafts[result] = dict(example=example, form=form, tax=tax, bank=bank)
+        ss.attempt_files[(result, previous + 1)] = ss.drafts[result]
+        ss.pop("running", None)
+        navigate("Case", result)
+        return
+    if ss.get("run_error"):
+        st.error(ss.pop("run_error"))
     st.caption(f"{ref} · Submit the next attempt with updated evidence." if ref else
                "Submit company, tax and banking evidence for onboarding.")
     eid = ss.editor
@@ -202,34 +241,8 @@ def intake(ref=None):
             st.error("Attach at least one supporting document before running the checks.")
         if not form["name"].strip() or not (tax or bank):
             return
-        with st.status("Processing application", expanded=True) as live:
-            stages = {stage: live.empty() for stage in STAGES}
-            starts = {}
-            for stage, slot in stages.items():
-                slot.text(f"○  {stage}")
-
-            def notify(stage, state, summary):
-                if state == "Running":
-                    starts[stage] = perf_counter()
-                elif demo_pacing:
-                    sleep(max(0., .7 - (perf_counter() - starts[stage])) if stage in starts else 0.)
-                icon = {"Running": "⏳", "Complete": "✓", "Issues": "⚠", "Failed": "✕"}[state]
-                stages[stage].text(f"{icon}  {stage}" + (f" · {summary}" if summary else " · Running"))
-                if demo_pacing and stage == STAGES[0]:
-                    sleep(.7)
-            try:
-                result = execute(store, workspace, eid, form, tax, bank, ref=ref,
-                                 previous=previous, notify=notify, ai=ai)
-            except CaseConflict as exc:
-                st.error(str(exc))
-                return
-            failed = store.history(workspace, result)[0]["state"] == "Failed"
-            live.update(label="Run failed" if failed else "Run recorded", state="error" if failed else "complete")
-            if demo_pacing:
-                sleep(1.5)
-        ss.drafts[result] = dict(example=example, form=form, tax=tax, bank=bank)
-        ss.attempt_files[(result, previous + 1)] = ss.drafts[result]
-        navigate("Case", result)
+        ss.running = dict(form=form, tax=tax, bank=bank, ref=ref, previous=previous, eid=eid, example=example)
+        st.rerun()
 
 
 def show_evidence(check):
