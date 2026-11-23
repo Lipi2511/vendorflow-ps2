@@ -1,7 +1,9 @@
 from datetime import datetime, timezone, timedelta
+from hashlib import sha256
 import html
 import json
 import os
+from pathlib import Path
 import re
 from time import perf_counter, sleep
 from uuid import uuid4
@@ -35,7 +37,7 @@ def setting(name):
 
 
 @st.cache_resource(show_spinner=False)
-def assistance(key, model, base_url):
+def assistance(key, model, base_url, code_version):
     from openai import OpenAI
 
     client = OpenAI(api_key=key, base_url=base_url or None, timeout=20.0, max_retries=1)
@@ -43,7 +45,9 @@ def assistance(key, model, base_url):
 
 
 key_from_settings = setting("OPENAI_API_KEY")
-ai = (assistance(key_from_settings, setting("VENDORFLOW_MODEL"), setting("OPENAI_BASE_URL"))
+# A redeploy must not keep serving a cached client object built from older AI code.
+ai_code_version = sha256(Path(__file__).with_name("vendorflow").joinpath("ai.py").read_bytes()).hexdigest()
+ai = (assistance(key_from_settings, setting("VENDORFLOW_MODEL"), setting("OPENAI_BASE_URL"), ai_code_version)
       if key_from_settings else None)
 ss = st.session_state
 if not re.fullmatch(r"[a-f0-9]{32}", st.query_params.get("w", "")):
