@@ -319,10 +319,14 @@ def case_detail(ref):
             verified = st.checkbox("I verified this independently through the supplier's established contact",
                                    key=review_key+"verified")
             ready = bool(reviewer.strip() and note.strip())
+            if not ready:
+                st.caption("Enter a reviewer name and verification note.")
             approve_col, reject_col, return_col = st.columns(3)
-            approve = approve_col.button("Verify & approve", type="primary", disabled=not (ready and verified))
-            reject = reject_col.button("Reject", disabled=not ready)
-            send_back = return_col.button("Send back to vendor", disabled=not (ready and vendor_instruction.strip()))
+            approve = approve_col.button("Verify & approve", type="primary", key=review_key+"approve",
+                                         disabled=not (ready and verified))
+            reject = reject_col.button("Reject", key=review_key+"reject", disabled=not ready)
+            send_back = return_col.button("Send back to vendor", key=review_key+"return",
+                                          disabled=not (ready and vendor_instruction.strip()))
             if approve or reject or send_back:
                 action = "approve" if approve else "reject" if reject else "return"
                 try:
