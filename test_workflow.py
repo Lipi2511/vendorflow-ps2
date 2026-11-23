@@ -123,3 +123,36 @@ def test_intake_minimum_and_account_name_normalisation(store):
     assert not store.latest("local")
     assert submit(store, form=fields | {"name": "M/s The Aster Looms Pvt. Ltd.",
                                         "account": "7100-0000 0146"})["decision"] == "Approved"
+
+def test_shared_account_across_new_suppliers(store):
+    assert submit(store)["decision"] == "Approved"
+    form = sample_form("Wrong document") | {"account":sample_form("New supplier")["account"]}
+    row = submit(store, "Wrong document", form=form)
+    assert row["owner"] == "Procurement"
+    assert "register.shared_account" in row["checks"]
+
+
+@pytest.mark.parametrize("field,value,code", [
+    ("pan", "AABCA1235F", "form.pan_match"), ("state", "29", "form.state"),
+    ("ifsc", "ZZZZ0000123", "form.bank_code"), ("account", "123456789", "form.account_sanity"),
+    ("account", "111111111", "form.account_sanity"),
+])
+def test_validation_rules(store, field, value, code):
+    row = submit(store, form=sample_form("New supplier") | {field:value})
+    assert row["owner"] == "Vendor"
+    assert any(c["code"] == code and not c["passed"] for c in json.loads(row["checks"]))
+
+
+def test_entity_initial_type_and_webmail():
+    from vendorflow.examples import gst_check
+    from vendorflow.policy import compare_documents, field_checks
+    base = sample_form("New supplier")
+    assert any(c.code == "email.domain_match" and c.passed for c in field_checks(base))
+    checks = field_checks(base | {"name":"Saffron Farms Private Limited", "email":"demo@gmail.com"})
+    assert any(c.code == "form.pan_initial" and not c.passed and c.severity == "procurement" for c in checks)
+    assert any(c.code == "email.webmail" and c.severity == "info" for c in checks)
+    prefix = "27AABPA1234F1Z"
+    proprietor = base | {"gst":prefix+gst_check(prefix), "pan":prefix[2:12]}
+    assert any(c.code == "form.pan_type" and not c.passed and c.severity == "vendor" for c in field_checks(proprietor))
+    checks = compare_documents(proprietor, {}, dict(holder="Another Person", account=base["account"], ifsc=base["ifsc"]))
+    assert checks[-1].severity == "procurement"

@@ -5,20 +5,31 @@ from dataclasses import asdict, dataclass
 
 import pymupdf
 
-from .examples import gst_check
+from .examples import STATES, gst_check
 
 LABELS = {
     "name": "Legal name", "trade": "Trade name", "email": "Business email",
+    "pan": "PAN", "state": "Registered address state", "contact": "Contact person",
     "gst": "GSTIN", "holder": "Account holder", "account": "Account number", "ifsc": "IFSC",
 }
 PATTERNS = {
     "name": r"legal name(?: of (?:the )?business)?",
     "gst": r"GSTIN(?:/UIN)?|registration number",
+    "pan": r"PAN|permanent account number",
+    "state": r"(?:address[ /]+)?state|registered address state",
     "holder": r"(?:bank )?account holder(?:'s)?(?: name)?|beneficiary name|name of account holder",
     "account": r"(?:bank )?account (?:number|no\.?)",
     "ifsc": r"IFSC(?: code)?",
 }
 GST = re.compile(r"(?:0[1-9]|[12][0-9]|3[0-8]|97)[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]")
+PAN_TYPES = dict(C="company", P="individual or proprietor", F="firm", H="HUF",
+                 A="association of persons", T="trust", B="body of individuals",
+                 L="local authority", J="artificial juridical person", G="government")
+BANK_CODES = dict(SBIN="State Bank of India", HDFC="HDFC Bank", ICIC="ICICI Bank",
+                  UTIB="Axis Bank", KKBK="Kotak Mahindra Bank", PUNB="Punjab National Bank",
+                  BARB="Bank of Baroda", CNRB="Canara Bank", UBIN="Union Bank of India",
+                  IDIB="Indian Bank", YESB="Yes Bank", INDB="IndusInd Bank", DEMO="Fictional demo bank")
+WEBMAIL = {"gmail", "yahoo", "outlook", "hotmail", "rediffmail", "icloud", "proton", "protonmail"}
 MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -31,6 +42,9 @@ def normalized(key, value):
         return "".join(aliases.get(word, word) for word in words)
     if key == "account":
         return re.sub(r"[\s-]+", "", value)
+    if key == "state":
+        names = {name.casefold(): code for code, name in STATES.items()}
+        return names.get(value.casefold(), value.upper())
     return value.upper()
 
 
@@ -42,6 +56,8 @@ def display_value(key, value):
     if key == "account":
         value = normalized(key, value)
         return "•••• " + value[-4:] if len(value) >= 4 else "incomplete"
+    if key == "state":
+        return STATES.get(normalized(key, value), value)[:110]
     return value[:110]
 
 
@@ -51,6 +67,7 @@ class Check:
     passed: bool
     detail: str
     action: str = ""
+    severity: str = "vendor"
 
     def data(self):
         return asdict(self)
@@ -92,7 +109,7 @@ def read_document(data, kind):
 
 
 def field_checks(form):
-    missing = [LABELS[k] for k in LABELS if k != "trade" and not form[k].strip()]
+    missing = [label for key, label in LABELS.items() if key != "trade" and not form.get(key, "").strip()]
     checks = [Check("form.required", not missing, "Required fields supplied." if not missing else
                     f"Missing fields: {', '.join(missing)}.", f"Complete {', '.join(missing)}.")]
     formats = [
@@ -106,6 +123,53 @@ def field_checks(form):
             continue
         checks.append(Check(f"form.{key}", bool(ok), title + (" passed." if ok else " failed."),
                             f"Correct the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} on the form."))
+    gst = normalized("gst", form["gst"])
+    pan = normalized("pan", form.get("pan", ""))
+    state = normalized("state", form.get("state", ""))
+    name = normalized("name", form["name"])
+    if pan:
+        pan_ok = bool(re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", pan))
+        checks.append(Check("form.pan", pan_ok, "PAN has the expected format." if pan_ok else "PAN format is invalid.",
+                            "Enter a valid PAN."))
+    if state and valid_gst(gst):
+        checks.append(Check("form.state", state == gst[:2],
+                            f"GSTIN state code {gst[:2]} · selected {display_value('state', state)}.",
+                            "Select the registered state that matches the GSTIN."))
+    if valid_gst(gst):
+        embedded = gst[2:12]
+        if re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", pan):
+            checks.append(Check("form.pan_match", pan == embedded, "Entered PAN compared with the PAN embedded in GSTIN.",
+                                "Enter the PAN matching the GSTIN."))
+        entity = embedded[3]
+        if name.endswith("limited"):
+            checks.append(Check("form.pan_type", entity == "C",
+                                "GSTIN indicates a company." if entity == "C" else
+                                f"GSTIN indicates a {PAN_TYPES.get(entity, 'different entity type')}, but the legal name indicates a company.",
+                                "Provide the GSTIN registered to this company."))
+        if entity != "P" and name:
+            checks.append(Check("form.pan_initial", embedded[4] == name[0].upper(),
+                                f"PAN name initial {embedded[4]} · legal name initial {name[0].upper()}.",
+                                severity="procurement"))
+    ifsc = normalized("ifsc", form["ifsc"])
+    if re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", ifsc):
+        bank_code = ifsc[:4]
+        checks.append(Check("form.bank_code", bank_code in BANK_CODES,
+                            BANK_CODES.get(bank_code, f"IFSC bank code {bank_code} is outside the demo allowlist."),
+                            "Provide an IFSC supported by this onboarding demo."))
+    account = normalized("account", form["account"])
+    if re.fullmatch(r"[0-9]{6,20}", account):
+        pattern = len(set(account)) == 1 or account in "0123456789" * 2 or account in "9876543210" * 2
+        checks.append(Check("form.account_sanity", not pattern,
+                            "Account number resembles a placeholder." if pattern else "Account number sanity check passed.",
+                            "Enter the bank account number shown on the bank proof."))
+    email = form["email"].strip().lower()
+    if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        first_label = email.rsplit("@", 1)[1].split(".")[0]
+        words = re.findall(r"[^\W_]+", re.sub(r"^(?:(?:m\s*/\s*s|the)\b[\s.:-]*)+", "", form["name"].lower()))
+        if first_label in WEBMAIL:
+            checks.append(Check("email.webmail", False, "Non-corporate email domain.", severity="info"))
+        elif words and first_label == words[0]:
+            checks.append(Check("email.domain_match", True, "Email domain aligns with the first word of the legal name.", severity="info"))
     return checks
 
 
@@ -118,8 +182,8 @@ def compare(key, left, right, source_a, source_b, action):
 def compare_documents(form, tax, bank):
     checks = []
     if tax:
-        for key in ("name", "gst"):
-            if not form[key].strip():
+        for key in ("name", "gst", "pan", "state"):
+            if key not in tax or not form.get(key, "").strip():
                 continue
             checks.append(compare(key, form[key], tax[key], "Application", "GST certificate",
                                   f"Reconcile the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} with the GST certificate."))
@@ -130,6 +194,12 @@ def compare_documents(form, tax, bank):
             checks.append(compare(key, form[key], bank[key], "Application", "Bank letter",
                                   f"Correct the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} or provide matching bank proof."))
         if form["name"].strip():
-            checks.append(compare("name", form["name"], bank["holder"], "Legal entity", "Bank letter holder",
-                                  "Provide bank proof in the applicant’s legal name or contact procurement for review."))
+            check = compare("name", form["name"], bank["holder"], "Legal entity", "Bank letter holder",
+                            "Provide bank proof in the applicant’s legal name or contact procurement for review.")
+            gst = normalized("gst", form["gst"])
+            if not check.passed and valid_gst(gst) and gst[5] == "P":
+                check.severity = "procurement"
+                check.action = ""
+                check.detail += " · Proprietor-held account. Confirm the proprietor’s identity."
+            checks.append(check)
     return checks

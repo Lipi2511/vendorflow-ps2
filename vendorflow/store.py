@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS suppliers (
   ending TEXT NOT NULL, ifsc TEXT NOT NULL, status TEXT NOT NULL, reference TEXT NOT NULL,
   PRIMARY KEY(workspace,gst)
 );
+CREATE INDEX IF NOT EXISTS supplier_accounts ON suppliers(account);
 """
 
 

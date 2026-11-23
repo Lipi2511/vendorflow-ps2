@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from vendorflow.examples import EXAMPLES, sample_files, sample_form, sample_pack
+from vendorflow.examples import EXAMPLES, STATES, sample_files, sample_form, sample_pack
 from vendorflow.policy import LABELS
 from vendorflow.store import CaseConflict, Store
 from vendorflow.workflow import execute
@@ -122,8 +122,12 @@ def intake(ref=None):
     with st.container():
         st.subheader("Company details")
         a, b = st.columns(2)
-        for col, field in [(a,"name"),(b,"trade"),(a,"gst"),(b,"email")]:
-            form[field] = col.text_input(LABELS[field] + (" (optional)" if field=="trade" else ""), form[field], max_chars=150, key=key+field)
+        for col, field in [(a,"name"),(b,"trade"),(a,"gst"),(b,"pan"),(a,"contact"),(b,"email")]:
+            form[field] = col.text_input(LABELS[field] + (" (optional)" if field=="trade" else ""), form.get(field, ""), max_chars=150, key=key+field)
+        states = ["", *STATES]
+        old_state = form.get("state", "")
+        form["state"] = a.selectbox(LABELS["state"], states, index=states.index(old_state) if old_state in states else 0,
+                                    format_func=lambda code: STATES.get(code, "Select a state"), key=key+"state")
         st.subheader("Banking details")
         a, b, c = st.columns([2, 1.5, 1.2])
         for col, field in [(a,"holder"),(b,"account"),(c,"ifsc")]:

@@ -24,9 +24,19 @@ def gst_check(base):
     return alphabet[-total % 36]
 
 
+STATES = dict(zip(
+    "01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 26 27 29 30 31 32 33 34 35 36 37 38".split(),
+    ("Jammu and Kashmir", "Himachal Pradesh", "Punjab", "Chandigarh", "Uttarakhand", "Haryana",
+     "Delhi", "Rajasthan", "Uttar Pradesh", "Bihar", "Sikkim", "Arunachal Pradesh", "Nagaland",
+     "Manipur", "Mizoram", "Tripura", "Meghalaya", "Assam", "West Bengal", "Jharkhand", "Odisha",
+     "Chhattisgarh", "Madhya Pradesh", "Gujarat", "Dadra and Nagar Haveli and Daman and Diu",
+     "Maharashtra", "Karnataka", "Goa", "Lakshadweep", "Kerala", "Tamil Nadu", "Puducherry",
+     "Andaman and Nicobar Islands", "Telangana", "Andhra Pradesh", "Ladakh"), strict=True))
+
+
 def sample_form(example):
     name, base, account = EXAMPLES[example]
-    return dict(name=name, trade="", email=f"ops@{name.split()[0].lower()}.example",
+    return dict(name=name, trade="", pan=base[2:12], state=base[:2], contact="Demo Procurement Contact", email=f"ops@{name.split()[0].lower()}.example",
                 gst=base + gst_check(base), holder=name, account=account, ifsc="DEMO0000123")
 
 
@@ -44,7 +54,8 @@ def pdf(title, rows):
 def sample_files(example):
     form = sample_form(example)
     tax = pdf("GST Registration Certificate", [
-        ("Legal Name of Business", form["name"]), ("GSTIN", form["gst"])])
+        ("Legal Name of Business", form["name"]), ("GSTIN", form["gst"]),
+        ("PAN", form["pan"]), ("State", STATES[form["state"]])])
     def bank_letter(holder):
         return pdf("Bank Account Confirmation Letter", [
             ("Account Holder", holder), ("Account Number", form["account"]), ("IFSC", form["ifsc"])])
