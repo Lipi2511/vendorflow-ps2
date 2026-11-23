@@ -336,6 +336,7 @@ def case_detail(ref):
                     st.rerun()
     if row["email_body"]:
         with st.expander("Email to vendor", expanded=True):
+            st.badge("Drafted by AI · validated" if row["email_method"] == "ai" and not row["review"] else "Template", color="gray")
             st.text(row["email_subject"])
             st.code(row["email_body"], language=None)
             recipient = files.get("form", {}).get("email", "").strip()

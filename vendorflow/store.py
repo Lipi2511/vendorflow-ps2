@@ -63,7 +63,7 @@ class Store:
             db.executescript(SCHEMA)
             db.execute("BEGIN IMMEDIATE")
             columns = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
-            for column in ("email_subject", "email_body", "supplier_snapshot", "submission_hash"):
+            for column in ("email_subject", "email_body", "supplier_snapshot", "submission_hash", "email_method"):
                 if column not in columns:
                     db.execute(f"ALTER TABLE runs ADD COLUMN {column} TEXT")
             for example, status, account, ref in [

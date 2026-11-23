@@ -429,3 +429,29 @@ def test_review_requires_explicit_verification(store):
         store.review("local", hold["ref"], 1, "approve", "Reviewer", "Checked", verified=False)
     assert store.history("local", hold["ref"])[0]["decision"] == "Pending"
     store.review("local", hold["ref"], 1, "reject", "Reviewer", "Declined", verified=False)
+
+@pytest.mark.parametrize("variant", ["valid", "missing", "internal", "extra", "long"])
+def test_ai_email_validation(variant):
+    from types import SimpleNamespace
+    from vendorflow.ai import Assistance, template_email
+    ref = "VF-EXAMPLE"
+    actions = ["Upload bank proof.", "Correct the PAN."]
+    subject, fallback = template_email(ref, actions)
+    body = f"Dear vendor,\nPlease update these details so we can continue.\n1. Upload bank proof.\n2. Correct the PAN.\nThank you. Case reference: {ref}"
+    if variant == "missing":
+        body = body.replace("Correct the PAN.", "Thank you.")
+    elif variant == "internal":
+        body += " SUP-017"
+    elif variant == "extra":
+        body += "\n3. Supply another document."
+    elif variant == "long":
+        body += " Thank you" * 100
+
+    class Fake:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=self)
+        def create(self, **kwargs):
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(dict(subject=subject, body=body))))])
+    result = Assistance(client=Fake()).draft(ref, [], actions)
+    assert result.method == ("ai" if variant == "valid" else "template")
+    assert result.body == (body if variant == "valid" else fallback)

@@ -2,6 +2,8 @@
 import base64
 import json
 import os
+import re
+from dataclasses import dataclass
 
 FIELD_MAP = {
     "name": "legal_name", "gst": "gstin", "pan": "pan", "state": "state",
@@ -23,6 +25,16 @@ EXTRACTION = object_schema({
 })
 EMAIL = object_schema({"subject": STRING, "body": STRING})
 OPENINGS = ("Please review the following items.", "Please update the items below so we can continue.")
+
+
+@dataclass
+class Draft:
+    subject: str
+    body: str
+    method: str
+
+    def __iter__(self):
+        return iter((self.subject, self.body))
 
 
 class Assistance:
@@ -61,16 +73,20 @@ class Assistance:
         subject, default = template_email(reference, actions)
         numbered = action_lines(actions)
         proposal = self.request("vendor_email", EMAIL,
-                                "Draft a polite email using the exact subject, reference and numbered actions supplied. "
-                                "The body must be three paragraphs separated by blank lines: one permitted opening, "
-                                "then the numbered actions unchanged, then the exact reference line. Add nothing else.",
+                                "Write a polite, specific email under 150 words with a greeting, 1–2 sentence context, "
+                                "a numbered list containing each required action verbatim, and a closing case reference. "
+                                "Keep the exact subject. Add no requirements. Mention no internal records, SUP numbers, "
+                                "register, fraud, blocks or risk. Do not promise approval.",
                                 json.dumps(dict(subject=subject, reference_line=f"Case reference: {reference}",
                                                 permitted_openings=OPENINGS, checks=codes, actions=numbered)))
         body = proposal.get("body", "")
         if (proposal.get("subject") == subject and isinstance(body, str) and len(body.split()) <= 150
-                and any(body == email_body(reference, actions, opening) for opening in OPENINGS)):
-            return subject, body
-        return subject, default
+                and all(" ".join(action.lower().split()) in " ".join(body.lower().split()) for action in actions)
+                and f"Case reference: {reference}" in body
+                and not re.search(r"SUP-|register|fraud|blocked|block|risk|suspicious|approved|guarantee", body, re.I)
+                and len(re.findall(r"^\s*\d+[.\])]", body, re.M)) == len(actions)):
+            return Draft(subject, body, "ai")
+        return Draft(subject, default, "template")
 
 
 def action_lines(actions):

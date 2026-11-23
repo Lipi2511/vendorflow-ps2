@@ -181,8 +181,9 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
                 actions = ["Contact procurement with this reference to request a review."]
             subject, body = (draft if draft and actions == draft_actions else
                              template_email(row["ref"], actions)) if actions else (None, None)
-            db.execute("""UPDATE runs SET state='Complete',decision=?,owner=?,message=?,checks=?,email_subject=?,email_body=?,supplier_snapshot=? WHERE id=?""",
-                       (decision, owner, message, json.dumps(evidence), subject, body, json.dumps(snapshot) if snapshot is not None else None, run))
+            method = draft.method if draft and actions == draft_actions else "template" if subject else None
+            db.execute("""UPDATE runs SET state='Complete',decision=?,owner=?,message=?,checks=?,email_subject=?,email_body=?,supplier_snapshot=?,email_method=? WHERE id=?""",
+                       (decision, owner, message, json.dumps(evidence), subject, body, json.dumps(snapshot) if snapshot is not None else None, method, run))
             summary = f"{decision} · {owner}" + (" · email draft prepared" if subject else "")
             store.finish_stage(db, run, last, "Complete", summary)
         notify(last, "Complete", summary)
