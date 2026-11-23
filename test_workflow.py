@@ -282,3 +282,60 @@ def test_case_presentation_and_preview(store):
     assert preview_pdf(bank, bank=True).startswith(b"\x89PNG")
     assert preview_pdf(bank, bank=True) != preview_pdf(bank)
     assert preview_pdf(b"bad input") is None
+
+@pytest.mark.parametrize("example,decision,owner,rule", [
+    ("Shared bank account", "Pending", "Procurement", "register.shared_account"),
+    ("PAN mismatch", "Pending", "Vendor", "form.pan_type"),
+    ("Scanned bank letter", "Pending", "Vendor", "bank.document"),
+    ("Abbreviated name", "Approved", "Complete", "compare.name.Legal entity"),
+])
+def test_additional_samples_without_api_key(store, example, decision, owner, rule):
+    row = submit(store, example)
+    assert (row["decision"], row["owner"]) == (decision, owner)
+    assert any(c["code"] == rule and c["passed"] == (decision == "Approved") for c in json.loads(row["checks"]))
+
+
+@pytest.mark.parametrize("confidence,decision,owner", [(.94, "Approved", "Complete"), (.84, "Pending", "Procurement")])
+def test_scanned_sample_with_mocked_vision(store, confidence, decision, owner):
+    from types import SimpleNamespace
+    import pymupdf
+    from vendorflow.ai import Assistance
+    from vendorflow.reporting import preview_pdf
+    form = sample_form("Scanned bank letter")
+    tax, bank, _ = sample_files("Scanned bank letter")
+    with pymupdf.open(stream=bank, filetype="pdf") as document:
+        assert not document[0].get_text().strip()
+    assert preview_pdf(bank, bank=True) is None
+
+    class Fake:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=self)
+        def create(self, **kwargs):
+            content = kwargs["messages"][-1]["content"]
+            assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+            fields = {name: dict(value=form[key], confidence=confidence, evidence=form[key])
+                      for name, key in (("account_holder","holder"), ("account_number","account"), ("ifsc","ifsc"))}
+            result = dict(document_type="bank_letter", fields=fields)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(result)))])
+
+    row = submit(store, "Scanned bank letter", docs=(tax, bank), ai=Assistance(client=Fake()))
+    assert (row["decision"], row["owner"]) == (decision, owner)
+    assert form["account"] not in row["checks"]
+    if decision == "Approved":
+        assert "llm_vision" in row["checks"]
+        assert "AI (0.94)" in store.events(row["id"])[1]["summary"]
+    else:
+        assert "Human review needed" in row["checks"]
+
+
+def test_kit_has_every_input_set():
+    from io import BytesIO
+    from zipfile import ZipFile
+    from vendorflow.examples import sample_pack
+    with ZipFile(BytesIO(sample_pack())) as archive:
+        assert archive.testzip() is None
+        assert {name.split("/")[0] for name in archive.namelist()} == {e.lower().replace(" ", "-") for e in EXAMPLES}
+        for name in EXAMPLES:
+            folder = name.lower().replace(" ", "-")
+            assert json.loads(archive.read(f"{folder}/form.json")) == sample_form(name)
+            assert archive.read(f"{folder}/bank.pdf") == sample_files(name)[1]

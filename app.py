@@ -175,7 +175,7 @@ def intake(ref=None):
         for col, field in [(a,"holder"),(b,"account"),(c,"ifsc")]:
             form[field] = col.text_input(LABELS[field], form[field], max_chars=120, key=key+field)
         st.subheader("Supporting documents")
-        st.caption("Text-based PDFs · Up to 5 MB and 10 pages each. Uploaded files replace any attached examples.")
+        st.caption("PDFs · Up to 5 MB and 10 pages each. Uploaded files replace any attached examples. AI can read the first three pages of image-only PDFs when enabled.")
         a, b = st.columns(2)
         tax_up = a.file_uploader("GST certificate", type=["pdf"], key=key+"tax")
         bank_up = b.file_uploader("Bank letter", type=["pdf"], key=key+"bank")
@@ -187,7 +187,7 @@ def intake(ref=None):
             b.caption(f"Bank upload received · {bank_up.size:,} bytes")
         elif bank:
             b.caption("A bank-slot PDF is attached.")
-        repair = bool(ref and use_example and example in ("Wrong document", "Different account holder")
+        repair = bool(ref and use_example and example in ("Wrong document", "Different account holder", "Scanned bank letter")
                       and st.checkbox("Attach the corrected sample bank letter"))
         submitted = st.button("Run onboarding checks", type="primary", key=key+"run")
     if submitted:

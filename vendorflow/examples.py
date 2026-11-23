@@ -12,6 +12,10 @@ EXAMPLES = {
     "Different account holder": ("Fern Studio Private Limited", "27AABCF3456F1Z", "710000000368"),
     "Changed bank account": ("Juniper Tools Private Limited", "27AABCJ4567F1Z", "710000008479"),
     "Blocked supplier": ("Vale Metals Private Limited", "27AABCV5678F1Z", "710000000580"),
+    "Shared bank account": ("Moss Circuit Private Limited", "27AABCM6742F1Z", "710000001824"),
+    "PAN mismatch": ("Iris Glass Private Limited", "27AABPX7835F1Z", "710000000691"),
+    "Scanned bank letter": ("Cedar Thread Private Limited", "27AABCC7152F1Z", "710000000782"),
+    "Abbreviated name": ("Orchid Foods Private Limited", "27AABCO9034F1Z", "710000001313"),
 }
 
 
@@ -51,6 +55,14 @@ def pdf(title, rows):
         return doc.tobytes(deflate=True, no_new_id=True)
 
 
+def image_only_pdf(source):
+    with pymupdf.open(stream=source, filetype="pdf") as readable, pymupdf.open() as scanned:
+        original = readable[0]
+        page = scanned.new_page(width=original.rect.width, height=original.rect.height)
+        page.insert_image(page.rect, pixmap=original.get_pixmap(dpi=150))
+        return scanned.tobytes(deflate=True, no_new_id=True)
+
+
 def sample_files(example):
     form = sample_form(example)
     tax = pdf("GST Registration Certificate", [
@@ -65,6 +77,10 @@ def sample_files(example):
         bank = tax
     elif example == "Different account holder":
         bank = bank_letter("Fern Retail Private Limited")
+    elif example == "Scanned bank letter":
+        bank = image_only_pdf(correct)
+    elif example == "Abbreviated name":
+        bank = bank_letter("M/s The Orchid Foods Pvt. Ltd.")
     return tax, bank, correct
 
 
@@ -77,6 +93,6 @@ def sample_pack():
             archive.writestr(f"{path}/form.json", json.dumps(sample_form(name), indent=2))
             archive.writestr(f"{path}/gst.pdf", tax)
             archive.writestr(f"{path}/bank.pdf", bank)
-            if name in ("Wrong document", "Different account holder"):
+            if name in ("Wrong document", "Different account holder", "Scanned bank letter"):
                 archive.writestr(f"{path}/corrected-bank.pdf", correct)
     return out.getvalue()
