@@ -146,6 +146,8 @@ def intake(ref=None):
         old = ss.drafts.get(ref, {})
     st.title("Correct application" if ref else "New supplier application")
     top = st.empty()
+    # A shared slot makes the run view replace the form immediately instead of leaving stale widgets below it.
+    body = st.empty()
     if ss.get("running"):
         pending = ss.running
         form, tax, bank = pending["form"], pending["tax"], pending["bank"]
@@ -178,7 +180,8 @@ def intake(ref=None):
                 st.rerun()
             summary_line.caption(f"{applicant} · {result}")
             failed = store.history(workspace, result)[0]["state"] == "Failed"
-            live.update(label="Run failed" if failed else "Run recorded", state="error" if failed else "complete")
+            live.update(label="Run failed" if failed else "Run recorded", state="error" if failed else "complete",
+                        expanded=True)
             if demo_pacing:
                 sleep(1.5)
         ss.drafts[result] = dict(example=example, form=form, tax=tax, bank=bank)
@@ -186,6 +189,11 @@ def intake(ref=None):
         ss.pop("running", None)
         navigate("Case", result)
         return
+    with body.container():
+        application_form(ref, previous, old, history[0] if ref else None)
+
+
+def application_form(ref, previous, old, latest):
     if ss.get("run_error"):
         st.error(ss.pop("run_error"))
     st.caption(f"{ref} · Submit the next attempt with updated evidence." if ref else
@@ -201,9 +209,9 @@ def intake(ref=None):
         tax, bank, _ = sample_files(example)
     if ref and old:
         form, tax, bank = old["form"], old["tax"], old["bank"]
-    if ref and history[0]["owner"] == "Vendor":
+    if ref and latest["owner"] == "Vendor":
         st.markdown("**Outstanding corrections**")
-        for action in store.outstanding(history[0]):
+        for action in store.outstanding(latest):
             st.text(f"☐ {action}")
     key = eid + example
     form = dict(form)
