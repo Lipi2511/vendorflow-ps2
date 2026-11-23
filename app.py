@@ -119,27 +119,31 @@ def intake(ref=None):
         form, tax, bank = old["form"], old["tax"], old["bank"]
     key = eid + example
     form = dict(form)
-    with st.form(key):
+    with st.container():
         st.subheader("Company details")
         a, b = st.columns(2)
         for col, field in [(a,"name"),(b,"trade"),(a,"gst"),(b,"email")]:
-            form[field] = col.text_input(LABELS[field] + (" (optional)" if field=="trade" else ""), form[field], max_chars=150)
+            form[field] = col.text_input(LABELS[field] + (" (optional)" if field=="trade" else ""), form[field], max_chars=150, key=key+field)
         st.subheader("Banking details")
         a, b, c = st.columns([2, 1.5, 1.2])
         for col, field in [(a,"holder"),(b,"account"),(c,"ifsc")]:
-            form[field] = col.text_input(LABELS[field], form[field], max_chars=120)
+            form[field] = col.text_input(LABELS[field], form[field], max_chars=120, key=key+field)
         st.subheader("Supporting documents")
         st.caption("Text-based PDFs · Up to 5 MB and 10 pages each. Uploaded files replace any attached examples.")
         a, b = st.columns(2)
         tax_up = a.file_uploader("GST certificate", type=["pdf"], key=key+"tax")
         bank_up = b.file_uploader("Bank letter", type=["pdf"], key=key+"bank")
-        if tax:
+        if tax_up is not None:
+            a.caption(f"GST upload received ? {tax_up.size:,} bytes")
+        elif tax:
             a.caption("A GST-slot PDF is attached.")
-        if bank:
+        if bank_up is not None:
+            b.caption(f"Bank upload received ? {bank_up.size:,} bytes")
+        elif bank:
             b.caption("A bank-slot PDF is attached.")
         repair = bool(ref and use_example and example in ("Wrong document", "Different account holder")
                       and st.checkbox("Attach the corrected sample bank letter"))
-        submitted = st.form_submit_button("Run onboarding checks", type="primary")
+        submitted = st.button("Run onboarding checks", type="primary", key=key+"run")
     if submitted:
         if repair:
             bank = sample_files(example)[2]
