@@ -51,6 +51,11 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self.connect()) as db, db:
             db.executescript(SCHEMA)
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
+            for column in ("email_subject", "email_body"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE runs ADD COLUMN {column} TEXT")
             for example, status, account, ref in [
                 ("Changed bank account", "Active", "710000001824", "SUP-017"),
                 ("Blocked supplier", "Blocked", "710000000580", "SUP-023"),

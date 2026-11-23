@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 
 import pymupdf
 
+from .ai import FIELD_MAP
 from .examples import STATES, gst_check
 
 LABELS = {
@@ -52,6 +53,14 @@ def valid_gst(value):
     return bool(GST.fullmatch(value) and gst_check(value[:-1]) == value[-1])
 
 
+def compact(value):
+    return "".join(ch for ch in unicodedata.normalize("NFKC", value).casefold() if ch.isalnum())
+
+
+def redact_numbers(value):
+    return re.sub(r"[0-9](?:[ -]*[0-9]){5,}", lambda match: display_value("account", match[0]), value)
+
+
 def display_value(key, value):
     if key == "account":
         value = normalized(key, value)
@@ -68,16 +77,18 @@ class Check:
     detail: str
     action: str = ""
     severity: str = "vendor"
+    readings: dict | None = None
 
     def data(self):
         return asdict(self)
 
 
-def read_document(data, kind):
+def read_document(data, kind, ai=None):
     label = "GST certificate" if kind == "tax" else "Bank letter"
     action = f"Upload a readable {label if kind == 'tax' else 'bank letter'} with the required fields."
-    def issue(detail):
-        return {}, Check(f"{kind}.document", False, detail, action)
+    readings = {}
+    def issue(detail, remedy=action, severity="vendor", fields=None):
+        return fields or {}, Check(f"{kind}.document", False, detail, remedy, severity, readings)
 
     if not data:
         return issue(f"{label} is missing.")
@@ -88,24 +99,81 @@ def read_document(data, kind):
             if doc.needs_pass or not 1 <= len(doc) <= 10:
                 return issue(f"{label} must be unlocked and contain 1–10 pages.")
             text = "\n".join(page.get_text("text", sort=True) for page in doc)
+            images = []
+            if not text.strip() and ai:
+                for page in list(doc)[:3]:
+                    scale = min(150 / 72, 2200 / max(page.rect.width, page.rect.height, 1))
+                    images.append(page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes("png"))
     except (RuntimeError, ValueError, pymupdf.FileDataError):
         return issue(f"{label} could not be read.")
-    if not text.strip():
-        return issue(f"{label} has no readable text. Image-only documents require a text-based copy.")
+    if not text.strip() and not ai:
+        return issue(f"{label} has no readable text. Image-only documents require a text-based copy.",
+                     f"Upload a text-based copy of the {label if kind == 'tax' else 'bank letter'}.")
+    expected_type = "gst_certificate" if kind == "tax" else "bank_letter"
+    required = ("name", "gst") if kind == "tax" else ("holder", "account", "ifsc")
+    candidates = (*required, "pan", "state") if kind == "tax" else required
     fields = {}
+    ambiguous = set()
     for key, pattern in PATTERNS.items():
         # Accept a labelled value on the same or immediately following line.
         matches = re.findall(rf"(?im)^[ \t]*(?:\d+\.[ \t]*)?(?:{pattern})[ \t]*(?:[:\-][ \t]*|\n[ \t]*|[ \t]+)(?:\n[ \t]*)?([^\r\n]+)$", text)
         unique = {normalized(key, m): m.strip() for m in matches if normalized(key, m)}
         if len(unique) == 1:
             fields[key] = next(iter(unique.values()))
-    required = ("name", "gst") if kind == "tax" else ("holder", "account", "ifsc")
-    if kind == "bank" and "gst" in fields and not any(k in fields for k in required):
-        return issue("The bank upload contains tax evidence instead of bank account details.")
+        elif unique:
+            ambiguous.add(key)
+    def wrong_slot():
+        if kind == "bank":
+            return issue("The bank upload contains tax evidence instead of bank account details.",
+                         "The file in the bank letter slot is a GST certificate. Upload a bank letter or cancelled cheque showing the account holder, account number and IFSC.")
+        return issue("The GST upload contains banking evidence.",
+                     "Upload the GST certificate in the tax document slot.")
+
+    if ((kind == "bank" and "gst" in fields and not any(k in fields for k in required))
+            or (kind == "tax" and all(k in fields for k in ("holder", "account", "ifsc")) and "gst" not in fields)):
+        return wrong_slot()
+    fields = {key: fields[key] for key in candidates if key in fields}
+    for key, value in fields.items():
+        readings[key] = dict(method="regex", confidence=1.0, evidence=display_value(key, value))
+    if ai and any(key not in fields for key in required):
+        result = ai.extract(text[:60000], images)
+        doc_type = result.get("document_type")
+        if doc_type in {"gst_certificate", "bank_letter"} and doc_type != expected_type:
+            # On text PDFs the classification must also be corroborated by recognizable content.
+            marker = r"gst|registration certificate" if kind == "bank" else r"bank|ifsc|account holder"
+            if not text.strip() or re.search(marker, text, re.I):
+                return wrong_slot()
+        proposed = result.get("fields")
+        if doc_type == expected_type and isinstance(proposed, dict):
+            for key in candidates:
+                item = proposed.get(FIELD_MAP[key], {})
+                if key in fields or key in ambiguous or not isinstance(item, dict):
+                    continue
+                value, confidence, evidence = item.get("value"), item.get("confidence"), item.get("evidence")
+                if not isinstance(value, str) or not value.strip() or not isinstance(evidence, str):
+                    continue
+                if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= confidence <= 1:
+                    continue
+                if text.strip():
+                    # Normalize whitespace and punctuation without reordering the document.
+                    needle = compact(value)
+                    if not needle or needle not in compact(text) or not compact(evidence) or compact(evidence) not in compact(text):
+                        continue
+                elif confidence < 0.85:
+                    continue
+                fields[key] = value.strip()
+                # Preserve safe evidence only. Account numbers and surrounding text never enter the audit.
+                readings[key] = dict(method="llm_text" if text.strip() else "llm_vision", confidence=confidence,
+                                     evidence=display_value(key, value) if kind == "bank" else redact_numbers(evidence[:160]))
     missing = [LABELS[k] for k in required if k not in fields]
+    if missing and ai:
+        return issue(f"Automated reading uncertain for {', '.join(missing)}. Human review needed.",
+                     "", "procurement", fields)
     if missing:
         return issue(f"{label} lacks unambiguous evidence for {', '.join(missing)}.")
-    return fields, Check(f"{kind}.document", True, f"{label} contains the required labelled fields.")
+    methods = {field["method"] for field in readings.values()}
+    suffix = " using AI-assisted extraction" if methods - {"regex"} else ""
+    return fields, Check(f"{kind}.document", True, f"{label} fields read{suffix}.", readings=readings)
 
 
 def field_checks(form):
@@ -189,11 +257,11 @@ def compare_documents(form, tax, bank):
                                   f"Reconcile the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} with the GST certificate."))
     if bank:
         for key in ("holder", "account", "ifsc"):
-            if not form[key].strip():
+            if key not in bank or not form[key].strip():
                 continue
             checks.append(compare(key, form[key], bank[key], "Application", "Bank letter",
                                   f"Correct the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} or provide matching bank proof."))
-        if form["name"].strip():
+        if form["name"].strip() and "holder" in bank:
             check = compare("name", form["name"], bank["holder"], "Legal entity", "Bank letter holder",
                             "Provide bank proof in the applicant’s legal name or contact procurement for review.")
             gst = normalized("gst", form["gst"])

@@ -1,10 +1,14 @@
 from datetime import datetime, timezone, timedelta
+import html
 import json
+import os
 import re
 from uuid import uuid4
+from urllib.parse import quote, urlencode
 
 import streamlit as st
 
+from vendorflow.ai import Assistance
 from vendorflow.examples import EXAMPLES, STATES, sample_files, sample_form, sample_pack
 from vendorflow.policy import LABELS
 from vendorflow.store import CaseConflict, Store
@@ -18,6 +22,20 @@ st.markdown("""<style>
 h1,h2,h3{letter-spacing:-.035em}
 [data-testid="stCaptionContainer"]{color:#4b625b}
 </style>""", unsafe_allow_html=True)
+def api_key():
+    try:
+        return str(st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", "")).strip()
+    except FileNotFoundError:
+        return os.environ.get("OPENAI_API_KEY", "").strip()
+
+
+@st.cache_resource(show_spinner=False)
+def assistance(key):
+    return Assistance(key)
+
+
+key_from_settings = api_key()
+ai = assistance(key_from_settings) if key_from_settings else None
 ss = st.session_state
 if not re.fullmatch(r"[a-f0-9]{32}", st.query_params.get("w", "")):
     st.query_params["w"] = uuid4().hex
@@ -51,6 +69,7 @@ def timestamp(value):
 with st.sidebar:
     st.header("VendorFlow")
     st.caption("PROCUREMENT WORKSPACE")
+    st.caption("AI extraction available" if ai else "AI extraction off")
     if st.button("Dashboard", icon=":material/dashboard:", width="stretch"):
         navigate("Dashboard")
     if st.button("New application", icon=":material/add:", width="stretch", type="primary"):
@@ -167,7 +186,7 @@ def intake(ref=None):
                 stages[stage].write(f"{stage} · {state}")
             try:
                 result = execute(store, workspace, eid, form, tax, bank, ref=ref,
-                                 previous=previous, notify=notify)
+                                 previous=previous, notify=notify, ai=ai)
             except CaseConflict as exc:
                 st.error(str(exc))
                 return
@@ -197,10 +216,23 @@ def case_detail(ref):
         if row["id"] == current["id"] and (status == "Failed" or row["owner"] == "Vendor"):
             if st.button("Correct and resubmit" if status!="Failed" else "Retry application", type="primary"):
                 navigate("Correction", ref)
+    if row["email_body"]:
+        with st.expander("Email to vendor", expanded=True):
+            st.text(row["email_subject"])
+            st.code(row["email_body"], language=None)
+            recipient = ss.drafts.get(ref, {}).get("form", {}).get("email", "")
+            email_query = urlencode(dict(subject=row["email_subject"], body=row["email_body"]), quote_via=quote)
+            link = f"mailto:{quote(recipient, safe='@.')}?{email_query}"
+            st.markdown(f'<a href="{html.escape(link, quote=True)}">Open in your email app</a>', unsafe_allow_html=True)
+    elif row["owner"] == "Procurement" and status == "Pending":
+        st.info("Internal note · Procurement will verify the evidence before the vendor is asked to act.")
     checks = json.loads(row["checks"])
     st.subheader("Decision evidence")
     for check in sorted(checks, key=lambda c: c["passed"]):
         st.text(("✓  " if check["passed"] else "Review  ·  ") + check["detail"])
+        for field, reading in (check.get("readings") or {}).items():
+            badge = "Read by rules" if reading["method"] == "regex" else f"Read by AI · {reading['confidence']:.2f}"
+            st.caption(f"{LABELS[field]} · {badge} · {reading['evidence']}")
     with st.expander("Execution history", expanded=True):
         for event in store.events(row["id"]):
             st.text(f"{event['stage']}  ·  {event['state']}")

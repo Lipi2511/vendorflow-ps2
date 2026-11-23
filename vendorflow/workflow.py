@@ -2,6 +2,7 @@ from contextlib import closing
 import json
 import logging
 
+from .ai import template_email, vendor_actions
 from .policy import Check, compare_documents, field_checks, normalized, read_document, valid_gst
 from .store import CaseConflict, fingerprint, now
 
@@ -55,7 +56,7 @@ def decide(checks):
     return "Approved", "Complete", "Approved for internal onboarding. Bank ownership verification is required before payment."
 
 
-def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previous=0, notify=None):
+def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previous=0, notify=None, ai=None):
     if not form.get("name", "").strip() or not (tax_pdf or bank_pdf):
         raise CaseConflict("Enter a legal name and attach at least one document before running the checks.")
     row, created = store.start(workspace, token, form["name"], ref, previous)
@@ -74,8 +75,12 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
         return result
 
     def documents():
-        tax, tax_check = read_document(tax_pdf, "tax")
-        bank, bank_check = read_document(bank_pdf, "bank")
+        if ai:
+            tax, tax_check = read_document(tax_pdf, "tax", ai)
+            bank, bank_check = read_document(bank_pdf, "bank", ai)
+        else:
+            tax, tax_check = read_document(tax_pdf, "tax")
+            bank, bank_check = read_document(bank_pdf, "bank")
         checks.extend([tax_check, bank_check])
         return tax, bank
 
@@ -94,9 +99,20 @@ def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previ
             decision, owner, message = decide(checks)
             if decision == "Approved":
                 store.add_supplier(db, workspace, form, "Active", row["ref"])
-            db.execute("""UPDATE runs SET state='Complete',decision=?,owner=?,message=?,checks=? WHERE id=?""",
-                       (decision, owner, message, json.dumps([c.data() for c in checks]), run))
+            evidence = [c.data() for c in checks]
+            actions = vendor_actions(evidence) if owner == "Vendor" else []
+            if decision == "Rejected":
+                actions = ["Contact procurement with this reference to request a review."]
+            subject, body = template_email(row["ref"], actions) if actions else (None, None)
+            db.execute("""UPDATE runs SET state='Complete',decision=?,owner=?,message=?,checks=?,email_subject=?,email_body=? WHERE id=?""",
+                       (decision, owner, message, json.dumps(evidence), subject, body, run))
             db.execute("UPDATE events SET state='Complete',finished=? WHERE run=? AND stage=?", (now(), run, last))
+        if ai and actions:
+            codes = [c.code for c in checks if not c.passed and c.severity == "vendor"] if owner == "Vendor" else ["onboarding.review_route"]
+            subject, body = ai.draft(row["ref"], codes, actions)
+            with closing(store.connect()) as db, db:
+                db.execute("UPDATE runs SET email_subject=?,email_body=? WHERE id=? AND owner=?",
+                           (subject, body, run, owner))
         notify(last, "Complete")
     except Exception:
         logging.exception("Workflow interrupted for %s", row["ref"])

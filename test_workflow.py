@@ -156,3 +156,30 @@ def test_entity_initial_type_and_webmail():
     assert any(c.code == "form.pan_type" and not c.passed and c.severity == "vendor" for c in field_checks(proprietor))
     checks = compare_documents(proprietor, {}, dict(holder="Another Person", account=base["account"], ifsc=base["ifsc"]))
     assert checks[-1].severity == "procurement"
+
+def test_ai_guard_and_draft(store):
+    from types import SimpleNamespace
+    from vendorflow.ai import Assistance
+
+    class Fake:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=self)
+        def create(self, **kwargs):
+            schema = kwargs["response_format"]["json_schema"]["name"]
+            if schema == "vendor_document":
+                result = dict(document_type="bank_letter", fields={
+                    "account_holder": dict(value="Imaginary Name", confidence=.99, evidence="letter"),
+                    "account_number": dict(value="710000000146", confidence=.99, evidence="710000000146"),
+                    "ifsc": dict(value="DEMO0000123", confidence=.98, evidence="DEMO0000123"),
+                })
+            else:
+                result = dict(subject="Unsafe subject", body="Unrelated requirement")
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(result)))])
+
+    ai = Assistance(client=Fake())
+    data = pdf("Bank letter", [("Routing", "DEMO0000123"), ("Destination", "710000000146")])
+    fields, check = read_document(data, "bank", ai)
+    assert check.severity == "procurement" and "holder" not in fields
+    assert check.readings["account"]["evidence"] == "•••• 0146"
+    row = submit(store, "Wrong document", ai=ai)
+    assert "cancelled cheque" in row["email_body"] and row["ref"] in row["email_body"]

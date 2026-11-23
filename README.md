@@ -43,3 +43,7 @@ The supplier-register check and enrollment share a transaction. A repeated submi
 ## Design references
 
 The existing-supplier check and linked correction flow follow [Oracle's supplier registration process](https://docs.oracle.com/en/cloud/saas/procurement/26d/oaprc/supplier-registration-process.html) and [registration approval actions](https://docs.oracle.com/en/cloud/saas/procurement/26b/oaprc/supplier-registration-approval-actions.html). Independent handling of changed banking details follows the [Western Australian Auditor General’s supplier master guidance](https://audit.wa.gov.au/reports-and-publications/reports/supplier-master-files-better-practice-guide/). The legal name and trade name distinction is documented in the [GST taxpayer guide](https://tutorial.gst.gov.in/userguide/taxpayersdashboard/Search_Taxpayer_manual.htm).
+
+## Optional AI
+
+Set `OPENAI_API_KEY` in Streamlit Community Cloud secrets or your local environment to enable extraction fallback and vendor email drafting. `VENDORFLOW_MODEL` overrides the default `gpt-4o-mini`. Use fictional documents only. On API failures, unresolved extraction routes to procurement while email drafting uses deterministic wording.
