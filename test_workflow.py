@@ -295,7 +295,7 @@ def test_additional_samples_without_api_key(store, example, decision, owner, rul
     assert any(c["code"] == rule and c["passed"] == (decision == "Approved") for c in json.loads(row["checks"]))
 
 
-@pytest.mark.parametrize("confidence,decision,owner", [(.94, "Approved", "Complete"), (.84, "Pending", "Procurement")])
+@pytest.mark.parametrize("confidence,decision,owner", [(.94, "Pending", "Procurement"), (.84, "Pending", "Procurement")])
 def test_scanned_sample_with_mocked_vision(store, confidence, decision, owner):
     from types import SimpleNamespace
     import pymupdf
@@ -321,7 +321,8 @@ def test_scanned_sample_with_mocked_vision(store, confidence, decision, owner):
     row = submit(store, "Scanned bank letter", docs=(tax, bank), ai=Assistance(client=Fake()))
     assert (row["decision"], row["owner"]) == (decision, owner)
     assert form["account"] not in row["checks"]
-    if decision == "Approved":
+    if confidence >= .85:
+        assert "bank.vision_confirmation" in row["checks"]
         assert "llm_vision" in row["checks"]
         assert "AI (0.94)" in store.events(row["id"])[1]["summary"]
     else:

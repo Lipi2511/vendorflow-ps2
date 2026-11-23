@@ -172,6 +172,10 @@ def read_document(data, kind, ai=None):
                      "", "procurement", fields)
     if missing:
         return issue(f"{label} lacks unambiguous evidence for {', '.join(missing)}.")
+    if kind == "bank" and any(readings.get(key, {}).get("method") == "llm_vision" for key in required):
+        return fields, Check("bank.vision_confirmation", False,
+                             "Bank details were read from a scanned image by AI. Confirm against the original before approval.",
+                             severity="procurement", readings=readings)
     methods = {field["method"] for field in readings.values()}
     suffix = " using AI-assisted extraction" if methods - {"regex"} else ""
     return fields, Check(f"{kind}.document", True, f"{label} fields read{suffix}.", readings=readings)

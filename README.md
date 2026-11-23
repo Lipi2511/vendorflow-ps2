@@ -66,7 +66,7 @@ Select an input set from **New application** or use **Download sample kit** in t
 | Blocked supplier | **Rejected**. Corroborated exact match to an internal block. |
 | Shared bank account | **Pending · Procurement**. Another GSTIN already uses the account. |
 | PAN mismatch | **Pending · Vendor**. The GSTIN indicates a proprietor and the legal name indicates a company. |
-| Scanned bank letter | AI off gives **Pending · Vendor**. With AI, sufficient fields can yield **Approved**. Uncertain reading gives **Pending · Procurement**. |
+| Scanned bank letter | AI off gives **Pending · Vendor**. With AI, bank fields read from images require **Pending · Procurement** confirmation, including high-confidence readings. |
 | Abbreviated name | **Approved**. The bank letter's abbreviated name normalizes to the registered name. |
 
 ## Five-minute walkthrough
@@ -77,7 +77,7 @@ Select an input set from **New application** or use **Download sample kit** in t
 | 0:45–1:45 | Run **Wrong document**, open the vendor email, then correct the bank letter. Show **Approved** and reopen the original Pending attempt. |
 | 1:45–2:35 | Run **Shared bank account**. The documents agree, but another GSTIN uses the same account. Point out the procurement hold and masked evidence. |
 | 2:35–3:50 | Run **Changed bank account**. Record a fictional independent verification and click **Verify & approve**. Show the automated decision and review event alongside the new outcome. |
-| 3:50–4:40 | Run **Scanned bank letter** with AI configured. Open the confidence evidence and describe what happens when the image cannot be read with enough confidence. If AI is off, show the request for a text-based copy. |
+| 3:50–4:40 | Run **Scanned bank letter** with AI configured. Open the confidence evidence and explain why scanned banking details require independent procurement confirmation. If AI is off, show the request for a text-based copy. |
 | 4:40–5:00 | Return to the dashboard and filter by procurement owner. Point out the reasons chart and distinct application counts. |
 
 Start from the base URL to get a fresh register. Run the shared-account case before approving Juniper's bank change so both tests use the expected baseline. Use **Demo pacing** to slow stage transitions for the walkthrough.
