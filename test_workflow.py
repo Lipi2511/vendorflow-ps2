@@ -509,6 +509,23 @@ def test_provider_error_is_visible_without_secrets(caplog):
     assert "HTTP 401" in caplog.text
 
 
+def test_non_completion_response_names_the_endpoint():
+    from types import SimpleNamespace
+    from vendorflow.ai import Assistance
+
+    class WrongEndpoint:
+        base_url = "https://user:hidden@provider.example/wrong/"
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=self)
+        def create(self, **kwargs):
+            return "<html>provider landing page</html>"
+
+    connected, message = Assistance(client=WrongEndpoint()).test_connection()
+    assert not connected
+    assert "provider.example/wrong/ did not return a chat completion" in message
+    assert "OPENAI_BASE_URL" in message and "hidden" not in message and "landing" not in message
+
+
 def test_connection_reports_success_and_clears_error():
     from openai import RateLimitError
     from vendorflow.ai import Assistance

@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 FIELD_MAP = {
     "name": "legal_name", "gst": "gstin", "pan": "pan", "state": "state",
@@ -30,6 +31,12 @@ OPENINGS = ("Please review the following items.", "Please update the items below
 BANNED = re.compile(r"\bSUP-|\b(?:registers?|fraud|fraudulent|blocked|blocks?|blocking|risks?|risky|suspicious|"
                     r"approved|guarantee|guarantees|guaranteed)\b", re.I)
 CREDENTIAL = re.compile(r"\b(?:sk|gsk|xai)[-_][A-Za-z0-9_*.-]{6,}")
+
+
+class ProviderResponseError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+        self.message = message
 
 
 def error_text(exc, key=None):
@@ -76,10 +83,21 @@ class Assistance:
             messages=[{"role": "system", "content": instructions}, {"role": "user", "content": content}],
             response_format=response_format,
         )
-        data = json.loads(result.choices[0].message.content)
+        choices = getattr(result, "choices", None)
+        if not choices:
+            raise ProviderResponseError(self.response_problem(result))
+        data = json.loads(choices[0].message.content)
         if not isinstance(data, dict):
             raise ValueError("Model output was not a JSON object.")
         return data
+
+    def response_problem(self, result):
+        error = getattr(result, "error", None)
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            return error["message"]
+        endpoint = urlsplit(str(getattr(self.client, "base_url", "")))
+        where = f"{endpoint.hostname or ''}{endpoint.path}" or "The endpoint"
+        return f"{where} did not return a chat completion. Check OPENAI_BASE_URL."
 
     def record_failure(self, name, exc):
         # Optional service failures do not expose credentials or document contents in logs.
