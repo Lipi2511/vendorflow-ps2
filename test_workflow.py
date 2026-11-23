@@ -348,7 +348,7 @@ def test_streamlit_flow_and_optional_key(tmp_path, monkeypatch):
     monkeypatch.setenv("VENDORFLOW_DB", str(tmp_path / "streamlit.sqlite3"))
     app = AppTest.from_file("app.py", default_timeout=20).run()
     assert not app.exception
-    assert any(c.value == "AI extraction off" for c in app.caption)
+    assert any(c.value == "AI extraction off (no API key)" for c in app.caption)
     app.toggle[0].set_value(False).run()
 
     def click(label):
@@ -385,9 +385,10 @@ def test_streamlit_flow_and_optional_key(tmp_path, monkeypatch):
 
     monkeypatch.setattr("openai.OpenAI", fake_openai)
     monkeypatch.setenv("OPENAI_API_KEY", "fictional-test-key")
+    monkeypatch.setenv("VENDORFLOW_MODEL", "fictional-model")
     app_with_key = AppTest.from_file("app.py", default_timeout=20).run()
     assert not app_with_key.exception
-    assert any(c.value == "AI extraction available" for c in app_with_key.caption)
+    assert any(c.value == "AI extraction **on** · fictional-model" for c in app_with_key.caption)
 
 def test_reviewer_send_back_uses_public_instruction_only(store):
     hold = submit(store, "Changed bank account")

@@ -28,7 +28,8 @@ h1,h2,h3{letter-spacing:-.035em}
 def setting(name):
     try:
         configured = str(st.secrets.get(name) or "").strip()
-    except FileNotFoundError:
+    except Exception:
+        # Missing or malformed secrets must not stop the app. The environment remains available.
         configured = ""
     return configured or os.environ.get(name, "").strip()
 
@@ -75,7 +76,7 @@ def timestamp(value):
 with st.sidebar:
     st.header("VendorFlow")
     st.caption("PROCUREMENT WORKSPACE")
-    st.caption("AI extraction available" if ai else "AI extraction off")
+    st.caption(f"AI extraction **on** · {ai.model}" if ai else "AI extraction off (no API key)")
     demo_pacing = st.toggle("Demo pacing", value=True)
     if st.button("Dashboard", icon=":material/dashboard:", width="stretch"):
         navigate("Dashboard")

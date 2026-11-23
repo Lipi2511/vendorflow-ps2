@@ -16,14 +16,18 @@ For development, install pytest and run:
 
 For Streamlit Community Cloud, select the repository and branch, use app.py as the entry point, and select Python 3.12. The application works without credentials.
 
-### Enable optional AI
+### Enable AI on Streamlit Cloud
 
-Add the following to the app's **Settings → Secrets** in Streamlit Community Cloud. Locally, set the same values in .streamlit/secrets.toml or the environment. The secrets file is ignored by Git.
+1. Open the app's **Settings → Secrets**.
+2. Add the key below, and optionally a model. The default model is gpt-4o-mini.
+3. Save, then reboot the app.
 
-    OPENAI_API_KEY = "your-key"
-    VENDORFLOW_MODEL = "gpt-4o-mini"
+        OPENAI_API_KEY = "sk-..."
+        VENDORFLOW_MODEL = "gpt-4o-mini"
 
-The Streamlit model setting or environment variable can override the default. The key in Streamlit secrets takes precedence over the environment. With AI enabled, fallback extraction can send text or images of fictional documents to OpenAI. When the key is absent, the sidebar displays **AI extraction off**, image-only uploads get a request for a text copy, and follow-up messages use templates.
+The sidebar then displays **AI extraction on · model**. Locally, set the same values in .streamlit/secrets.toml or the environment. The secrets file is ignored by Git, so never commit it.
+
+The key in Streamlit secrets takes precedence over the environment. With AI enabled, fallback extraction can send text or images of fictional documents to OpenAI. When the key is absent, the sidebar displays **AI extraction off (no API key)**, image-only uploads get a request for a text copy, and follow-up messages use templates.
 
 ## How it works
 
