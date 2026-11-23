@@ -25,7 +25,12 @@ MAX_BYTES = 5 * 1024 * 1024
 def normalized(key, value):
     value = unicodedata.normalize("NFKC", value).strip()
     if key in ("name", "holder"):
-        return "".join(ch for ch in value.casefold() if ch.isalnum())
+        value = re.sub(r"^(?:(?:m\s*/\s*s|the)\b[\s.:-]*)+", "", value.casefold())
+        aliases = {"pvt": "private", "ltd": "limited", "co": "company"}
+        words = re.findall(r"[^\W_]+", value.replace("&", " and "))
+        return "".join(aliases.get(word, word) for word in words)
+    if key == "account":
+        return re.sub(r"[\s-]+", "", value)
     return value.upper()
 
 
@@ -34,7 +39,8 @@ def valid_gst(value):
 
 
 def display_value(key, value):
-    if key in ("gst", "account"):
+    if key == "account":
+        value = normalized(key, value)
         return "•••• " + value[-4:] if len(value) >= 4 else "incomplete"
     return value[:110]
 
@@ -52,7 +58,7 @@ class Check:
 
 def read_document(data, kind):
     label = "GST certificate" if kind == "tax" else "Bank letter"
-    action = f"Upload a readable {label.lower()} with the required fields."
+    action = f"Upload a readable {label if kind == 'tax' else 'bank letter'} with the required fields."
     def issue(detail):
         return {}, Check(f"{kind}.document", False, detail, action)
 
@@ -92,10 +98,12 @@ def field_checks(form):
     formats = [
         ("gst", valid_gst(form["gst"].strip().upper()), "GSTIN structure and checksum"),
         ("ifsc", re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", form["ifsc"].strip().upper()), "IFSC format"),
-        ("account", re.fullmatch(r"[0-9]{6,20}", form["account"].strip()), "Account number format (demo policy)"),
+        ("account", re.fullmatch(r"[0-9]{6,20}", normalized("account", form["account"])), "Account number format (demo policy)"),
         ("email", re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", form["email"].strip()), "Business email format"),
     ]
     for key, ok, title in formats:
+        if not form[key].strip():
+            continue
         checks.append(Check(f"form.{key}", bool(ok), title + (" passed." if ok else " failed."),
                             f"Correct the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} on the form."))
     return checks
@@ -111,12 +119,17 @@ def compare_documents(form, tax, bank):
     checks = []
     if tax:
         for key in ("name", "gst"):
+            if not form[key].strip():
+                continue
             checks.append(compare(key, form[key], tax[key], "Application", "GST certificate",
                                   f"Reconcile the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} with the GST certificate."))
     if bank:
         for key in ("holder", "account", "ifsc"):
+            if not form[key].strip():
+                continue
             checks.append(compare(key, form[key], bank[key], "Application", "Bank letter",
                                   f"Correct the {LABELS[key] if key in ('gst', 'ifsc') else LABELS[key].lower()} or provide matching bank proof."))
-        checks.append(compare("name", form["name"], bank["holder"], "Legal entity", "Bank letter holder",
-                              "Provide bank proof in the applicant’s legal name or contact procurement for review."))
+        if form["name"].strip():
+            checks.append(compare("name", form["name"], bank["holder"], "Legal entity", "Bank letter holder",
+                                  "Provide bank proof in the applicant’s legal name or contact procurement for review."))
     return checks

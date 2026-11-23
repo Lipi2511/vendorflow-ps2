@@ -134,11 +134,11 @@ def intake(ref=None):
         tax_up = a.file_uploader("GST certificate", type=["pdf"], key=key+"tax")
         bank_up = b.file_uploader("Bank letter", type=["pdf"], key=key+"bank")
         if tax_up is not None:
-            a.caption(f"GST upload received ? {tax_up.size:,} bytes")
+            a.caption(f"GST upload received · {tax_up.size:,} bytes")
         elif tax:
             a.caption("A GST-slot PDF is attached.")
         if bank_up is not None:
-            b.caption(f"Bank upload received ? {bank_up.size:,} bytes")
+            b.caption(f"Bank upload received · {bank_up.size:,} bytes")
         elif bank:
             b.caption("A bank-slot PDF is attached.")
         repair = bool(ref and use_example and example in ("Wrong document", "Different account holder")
@@ -149,6 +149,12 @@ def intake(ref=None):
             bank = sample_files(example)[2]
         tax = tax_up.getvalue() if tax_up is not None else tax
         bank = bank_up.getvalue() if bank_up is not None else bank
+        if not form["name"].strip():
+            st.error("Enter the legal name before running the checks.")
+        if not (tax or bank):
+            st.error("Attach at least one supporting document before running the checks.")
+        if not form["name"].strip() or not (tax or bank):
+            return
         with st.status("Processing application", expanded=True) as live:
             stages = {}
             def notify(stage, state):
@@ -194,7 +200,12 @@ def case_detail(ref):
     with st.expander("Execution history", expanded=True):
         for event in store.events(row["id"]):
             st.text(f"{event['stage']}  ·  {event['state']}")
-            st.caption(f"Started {event['started']}  ·  Finished {event['finished'] or '—'}")
+            finish = event["finished"]
+            duration = (datetime.fromisoformat(finish) - datetime.fromisoformat(event["started"])).total_seconds() if finish else None
+            detail = f"Started {timestamp(event['started'])}"
+            if duration is not None:
+                detail += f" · Finished {timestamp(finish)} · {duration * 1000:.0f} ms"
+            st.caption(detail)
     if st.button("Return to dashboard"):
         navigate("Dashboard")
 

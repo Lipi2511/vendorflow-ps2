@@ -78,7 +78,8 @@ def test_masked_data_and_workspace_isolation(store):
     assert submit(store, workspace="elsewhere")["decision"] == "Approved"
     with closing(store.connect()) as db:
         dump = "\n".join(db.iterdump())
-    for field in ["account", "gst", "email"]:
+    assert form["gst"] in row["checks"]
+    for field in ["account", "email"]:
         assert form[field] not in dump
 
 
@@ -100,10 +101,11 @@ def test_error_and_retry(store, monkeypatch):
 
 
 def test_missing_fields_and_conflicting_evidence(store):
-    form = sample_form("New supplier") | {"name":"", "gst":"invalid", "email":"bad"}
+    form = sample_form("New supplier") | {"gst":"invalid", "email":""}
     row = submit(store, form=form)
     assert row["decision"] == "Pending"
     assert "GSTIN" in row["message"] and "email" in row["message"].lower()
+    assert "form.email" not in row["checks"]
     data = pdf("Bank letter", [("Account Holder","A"),("Account Holder","B"),("Account Number","1234567"),("IFSC","DEMO0000123")])
     assert not read_document(data, "bank")[1].passed
 
@@ -111,3 +113,13 @@ def test_missing_fields_and_conflicting_evidence(store):
 def test_legal_and_trade_names(store):
     form = sample_form("New supplier")
     assert submit(store, form=form | {"name":form["name"].upper().replace(" ", "."), "trade":"Aster shop"})["decision"] == "Approved"
+
+def test_intake_minimum_and_account_name_normalisation(store):
+    fields = sample_form("New supplier")
+    with pytest.raises(CaseConflict):
+        submit(store, form=fields | {"name": ""})
+    with pytest.raises(CaseConflict):
+        submit(store, docs=(None, None))
+    assert not store.latest("local")
+    assert submit(store, form=fields | {"name": "M/s The Aster Looms Pvt. Ltd.",
+                                        "account": "7100-0000 0146"})["decision"] == "Approved"

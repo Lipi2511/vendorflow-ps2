@@ -3,7 +3,7 @@ import json
 import logging
 
 from .policy import Check, compare_documents, field_checks, normalized, read_document, valid_gst
-from .store import fingerprint, now
+from .store import CaseConflict, fingerprint, now
 
 
 def decide(form, tax, checks, record):
@@ -20,11 +20,11 @@ def decide(form, tax, checks, record):
             return "Rejected", "Procurement", "This application cannot proceed under the internal onboarding policy. Contact procurement with this reference to request a review."
         return "Pending", "Procurement", "Procurement needs to confirm the applicant’s identity. Please quote your application reference when contacting the team."
     if record:
-        changed = (record["account"] != fingerprint(form["account"]) or
+        changed = (record["account"] != fingerprint(normalized("account", form["account"])) or
                    record["ifsc"] != form["ifsc"].strip().upper())
         if changed:
             detail = (f"{record['reference']} · Account on file •••• {record['ending']} / {record['ifsc']}; "
-                      f"submitted •••• {form['account'][-4:]} / {form['ifsc']}. "
+                      f"submitted •••• {normalized('account', form['account'])[-4:]} / {form['ifsc']}. "
                       "Verify the change through the established supplier contact.")
             checks.append(Check("register.bank_change", False, detail))
             return "Pending", "Procurement", "Procurement is independently reviewing the banking details against an existing supplier record. No further upload is needed at this stage."
@@ -38,6 +38,8 @@ def decide(form, tax, checks, record):
 
 
 def execute(store, workspace, token, form, tax_pdf, bank_pdf, *, ref=None, previous=0, notify=None):
+    if not form.get("name", "").strip() or not (tax_pdf or bank_pdf):
+        raise CaseConflict("Enter a legal name and attach at least one document before running the checks.")
     row, created = store.start(workspace, token, form["name"], ref, previous)
     if not created:
         return row["ref"]

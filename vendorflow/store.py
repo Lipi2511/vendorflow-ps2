@@ -9,6 +9,7 @@ import sqlite3
 from uuid import uuid4
 
 from .examples import sample_form
+from .policy import normalized
 
 
 def now():
@@ -72,8 +73,8 @@ class Store:
     def add_supplier(db, workspace, form, status, ref, seed=False):
         command = "INSERT OR IGNORE" if seed else "INSERT"
         db.execute(f"{command} INTO suppliers VALUES(?,?,?,?,?,?,?,?)",
-                   (workspace, fingerprint(form["gst"]), form["name"], fingerprint(form["account"]),
-                    form["account"][-4:], form["ifsc"].upper(), status, ref))
+                   (workspace, fingerprint(form["gst"]), form["name"], fingerprint(normalized("account", form["account"])),
+                    normalized("account", form["account"])[-4:], form["ifsc"].upper(), status, ref))
 
     def start(self, workspace, token, name, ref=None, previous=0):
         with closing(self.connect()) as db, db:
