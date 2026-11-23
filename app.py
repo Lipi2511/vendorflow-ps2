@@ -52,6 +52,7 @@ ss.setdefault("screen", "Case" if st.query_params.get("case") else "Dashboard")
 
 
 def navigate(screen, ref=None):
+    ss.pop("running", None)
     ss.screen = screen
     if ref:
         st.query_params["case"] = ref
@@ -148,8 +149,11 @@ def intake(ref=None):
         pending = ss.running
         form, tax, bank = pending["form"], pending["tax"], pending["bank"]
         ref, previous, eid, example = (pending[k] for k in ("ref", "previous", "eid", "example"))
-        st.caption(f"{form['name']} · {form['gst']}" + (f" · {ref}" if ref else ""))
-        with top.container(), st.status("Processing application", expanded=True) as live:
+        applicant = " · ".join(part for part in (form["name"], form["gst"]) if part.strip())
+        panel = top.container()
+        summary_line = panel.empty()
+        summary_line.caption(applicant + (f" · {ref}" if ref else ""))
+        with panel, st.status("Processing application", expanded=True) as live:
             stages = {stage: live.empty() for stage in STAGES}
             starts = {}
             for stage, slot in stages.items():
@@ -171,6 +175,7 @@ def intake(ref=None):
                 ss.pop("running", None)
                 ss.run_error = str(exc)
                 st.rerun()
+            summary_line.caption(f"{applicant} · {result}")
             failed = store.history(workspace, result)[0]["state"] == "Failed"
             live.update(label="Run failed" if failed else "Run recorded", state="error" if failed else "complete")
             if demo_pacing:

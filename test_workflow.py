@@ -457,6 +457,19 @@ def test_ai_email_validation(variant):
     assert result.method == ("ai" if variant == "valid" else "template")
     assert result.body == (body if variant == "valid" else fallback)
 
+def test_leaving_intake_discards_a_queued_run(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("VENDORFLOW_DB", str(tmp_path / "streamlit.sqlite3"))
+    app = AppTest.from_file("app.py", default_timeout=20).run()
+    next(b for b in app.button if b.label == "New application").click().run()
+    app.session_state["running"] = {"queued": True}
+    next(b for b in app.button if b.label == "Dashboard").click().run()
+    assert not app.exception
+    assert "running" not in app.session_state
+    assert app.title[0].value == "Onboarding dashboard"
+
+
 def test_pan_copy_and_single_action():
     from vendorflow.policy import Check, compare_documents, field_checks
     from vendorflow.workflow import check_summary
